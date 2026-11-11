@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/dizziedbliss/meow-pspsps/internal/mock"
@@ -199,7 +200,9 @@ func mockCredData(typ, tenant string) map[string]any {
 	}
 }
 
-var updateSeq int64 = 500000
+var updateSeq atomic.Int64
+
+func init() { updateSeq.Store(500000) }
 
 func telegramStep(ctx context.Context, cl *n8nClient, env *Env, tenant, wfID, hookURL, secret string, idx int, st JobStep, sentBefore int, timeout time.Duration) (StepResult, int) {
 	from := st.From
@@ -207,11 +210,11 @@ func telegramStep(ctx context.Context, cl *n8nClient, env *Env, tenant, wfID, ho
 		from = "Alex"
 	}
 	chatID, _ := strconv.ParseInt(st.Session, 10, 64)
-	updateSeq++
+	seq := updateSeq.Add(1)
 	update := map[string]any{
-		"update_id": updateSeq,
+		"update_id": seq,
 		"message": map[string]any{
-			"message_id": updateSeq, "date": time.Now().Unix(), "text": st.Message,
+			"message_id": seq, "date": time.Now().Unix(), "text": st.Message,
 			"from": map[string]any{"id": chatID, "is_bot": false, "first_name": from, "language_code": "en"},
 			"chat": map[string]any{"id": chatID, "type": "private", "first_name": from},
 		},

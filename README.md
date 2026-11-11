@@ -35,7 +35,7 @@ bin/judge serve --db judge.db --rounds 1=<p1>,2=<p2>,3=<p3> --local-pool 4
 cloudflared tunnel run --url http://127.0.0.1:8080 <tunnel-name>      # https://judge.<domain>
 ```
 
-Without `JUDGE_LLM_KEY`, rubric checks are skipped and count as passing (a warning is printed).
+Rubric tests require a working judge; missing or unavailable grading fails the run as an infrastructure error rather than awarding points. Set `JUDGE_LLM_BASE` explicitly for key formats that are not recognized as Gemini keys.
 
 ### 3. Other workers
 

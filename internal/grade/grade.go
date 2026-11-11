@@ -25,6 +25,7 @@ const (
 	KeyRejected = "Key Rejected"
 	Invalid     = "Invalid Workflow"
 	NotRun      = "Not Run"
+	JudgeError  = "Judge Error"
 )
 
 // Check is one assertion's outcome.
@@ -32,6 +33,7 @@ type Check struct {
 	What   string `json:"what"`
 	OK     bool   `json:"ok"`
 	Detail string `json:"detail,omitempty"`
+	Infra  bool   `json:"infra,omitempty"`
 }
 
 // TestVerdict is one test's grade.
@@ -116,7 +118,10 @@ func Test(ctx context.Context, rt *problem.Rendered, tr *runner.TestResult, judg
 		v.Checks = append(v.Checks, checks...)
 		for _, c := range checks {
 			if !c.OK {
-				if strings.HasPrefix(c.What, "time") {
+				if c.Infra {
+					v.Verdict = JudgeError
+					v.Error = c.Detail
+				} else if strings.HasPrefix(c.What, "time") {
 					v.Verdict = TimeLimit
 				} else {
 					v.Verdict = WrongAnswer
@@ -125,6 +130,11 @@ func Test(ctx context.Context, rt *problem.Rendered, tr *runner.TestResult, judg
 				return v
 			}
 		}
+	}
+	if len(tr.Steps) != len(rt.Job.Steps) {
+		v.Verdict = NotRun
+		v.Error = "test did not complete every step"
+		return v
 	}
 	v.Verdict = Accepted
 	return v
@@ -183,6 +193,12 @@ func checkStep(ctx context.Context, e *problem.Expect, sr runner.StepResult, rt 
 		out = append(out, checkPath(doc, pc))
 	}
 
+	for _, c := range out {
+		if !c.OK {
+			return out
+		}
+	}
+
 	if e.Rubric != "" {
 		answer := sr.Body
 		if e.RubricField != "" && parsed {
@@ -192,9 +208,9 @@ func checkStep(ctx context.Context, e *problem.Expect, sr runner.StepResult, rt 
 		}
 		c := Check{What: "answer meets the rubric"}
 		if judge == nil {
-			c.OK, c.Detail = true, "skipped: no LLM judge configured"
+			c.Infra, c.Detail = true, "rubric judge is not configured"
 		} else if ok, reason, err := judge.Grade(ctx, e.Rubric, describeInput(rt), answer); err != nil {
-			c.OK, c.Detail = false, "judge error: "+err.Error()
+			c.Infra, c.Detail = true, "rubric judge unavailable: "+err.Error()
 		} else {
 			c.OK, c.Detail = ok, reason
 		}
@@ -229,7 +245,7 @@ func checkPath(doc any, pc problem.PathCheck) Check {
 	}
 	if pc.Equals != nil {
 		if pc.Approx != nil {
-			if math.Abs(toNum(v)-toNum(pc.Equals)) > *pc.Approx {
+			if math.IsNaN(toNum(v)) || math.IsNaN(toNum(pc.Equals)) || math.Abs(toNum(v)-toNum(pc.Equals)) > *pc.Approx {
 				return fail(fmt.Sprintf("≈ %v (±%v)", pc.Equals, *pc.Approx), got)
 			}
 		} else if !looseEqual(v, pc.Equals) {
@@ -263,10 +279,10 @@ func checkPath(doc any, pc problem.PathCheck) Check {
 			return fail(fmt.Sprintf("has length ≤ %d", *pc.MaxLen), fmt.Sprintf("length %d", n))
 		}
 	}
-	if pc.Gte != nil && toNum(v) < *pc.Gte {
+	if pc.Gte != nil && (math.IsNaN(toNum(v)) || toNum(v) < *pc.Gte) {
 		return fail(fmt.Sprintf("≥ %v", *pc.Gte), got)
 	}
-	if pc.Lte != nil && toNum(v) > *pc.Lte {
+	if pc.Lte != nil && (math.IsNaN(toNum(v)) || toNum(v) > *pc.Lte) {
 		return fail(fmt.Sprintf("≤ %v", *pc.Lte), got)
 	}
 	if len(pc.OneOf) > 0 {
@@ -365,7 +381,10 @@ func toNum(v any) float64 {
 	case int:
 		return float64(x)
 	case string:
-		f, _ := strconv.ParseFloat(strings.TrimSpace(x), 64)
+		f, err := strconv.ParseFloat(strings.TrimSpace(x), 64)
+		if err != nil {
+			return math.NaN()
+		}
 		return f
 	}
 	return math.NaN()

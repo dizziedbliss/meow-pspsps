@@ -33,7 +33,7 @@ func NewOpenAIJudge(base, key, model string) *OpenAIJudge {
 		model = "gpt-4o-mini"
 	}
 	return &OpenAIJudge{BaseURL: strings.TrimRight(base, "/"), APIKey: key, Model: model,
-		hc: &http.Client{Timeout: 60 * time.Second}, sem: make(chan struct{}, 8)}
+		hc: &http.Client{Timeout: 60 * time.Second}, sem: make(chan struct{}, 1)}
 }
 
 const judgePrompt = `You grade one answer produced by a contestant's automation workflow in a hackathon.
@@ -44,7 +44,11 @@ Reply with JSON only: {"pass": true|false, "reason": "<one short sentence>"}`
 
 // Grade asks the model for a pass/fail verdict.
 func (j *OpenAIJudge) Grade(ctx context.Context, rubric, input, answer string) (bool, string, error) {
-	j.sem <- struct{}{}
+	select {
+	case j.sem <- struct{}{}:
+	case <-ctx.Done():
+		return false, "", ctx.Err()
+	}
 	defer func() { <-j.sem }()
 	user := fmt.Sprintf("RUBRIC:\n%s\n\nINPUT:\n%s\n\nANSWER:\n%s", rubric, clip(input, 6000), clip(answer, 6000))
 	body, _ := json.Marshal(map[string]any{
@@ -57,7 +61,7 @@ func (j *OpenAIJudge) Grade(ctx context.Context, rubric, input, answer string) (
 		},
 	})
 	var lastErr error
-	for attempt := 0; attempt < 3; attempt++ {
+	for attempt := 0; attempt < 5; attempt++ {
 		req, _ := http.NewRequestWithContext(ctx, "POST", j.BaseURL+"/chat/completions", bytes.NewReader(body))
 		req.Header.Set("Authorization", "Bearer "+j.APIKey)
 		req.Header.Set("Content-Type", "application/json")
@@ -71,11 +75,17 @@ func (j *OpenAIJudge) Grade(ctx context.Context, rubric, input, answer string) (
 		resp.Body.Close()
 		if resp.StatusCode == 429 || resp.StatusCode >= 500 {
 			lastErr = fmt.Errorf("judge LLM returned %d", resp.StatusCode)
-			time.Sleep(time.Duration(attempt+1) * 3 * time.Second)
+			if attempt < 4 {
+				select {
+				case <-time.After(15 * time.Second):
+				case <-ctx.Done():
+					return false, "", ctx.Err()
+				}
+			}
 			continue
 		}
 		if resp.StatusCode != 200 {
-			return false, "", fmt.Errorf("judge LLM returned %d: %s", resp.StatusCode, clip(string(data), 200))
+			return false, "", fmt.Errorf("judge LLM returned HTTP %d", resp.StatusCode)
 		}
 		var out struct {
 			Choices []struct {

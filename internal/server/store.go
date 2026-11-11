@@ -150,7 +150,7 @@ func (s *Store) CreateSession(token string, teamID int64, admin bool) error {
 func (s *Store) Session(token string) (int64, bool, bool) {
 	var tid sql.NullInt64
 	var admin bool
-	err := s.db.QueryRow(`SELECT team_id, admin FROM sessions WHERE token = ?`, token).Scan(&tid, &admin)
+	err := s.db.QueryRow(`SELECT team_id, admin FROM sessions WHERE token = ? AND created > ?`, token, now()-24*60*60).Scan(&tid, &admin)
 	if err != nil {
 		return 0, false, false
 	}

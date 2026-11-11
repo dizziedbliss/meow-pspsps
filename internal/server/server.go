@@ -445,6 +445,13 @@ func (s *Server) gradeRun(run *Run, res *runner.Result) {
 		}
 		wg.Wait()
 		for _, v := range verdicts {
+			if v.Verdict == grade.JudgeError || v.Verdict == grade.NotRun {
+				log.Printf("run %d: grading incomplete: %s", run.ID, v.Error)
+				_ = s.store.FinishRun(run.ID, StatusFailed, "", "the judge could not complete grading; please try again or contact an organiser", 0, 0, "")
+				return
+			}
+		}
+		for _, v := range verdicts {
 			total += v.Weight
 			if v.Verdict == grade.Accepted {
 				passed += v.Weight

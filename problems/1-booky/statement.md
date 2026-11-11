@@ -10,6 +10,8 @@ Build **Booky**, a Telegram bot that books appointments into a Google Calendar. 
 - The judge **simulates Telegram and Google Calendar**, so you don't paste anything for those. Build with your own bot and Google account; the judge swaps in its simulated ones automatically.
 - **Timezone:** Asia/Kolkata. "Today" means today in India.
 
+You may use any supported node layout and any wording that meets the requirements. The judge checks replies and calendar outcomes, not whether your workflow matches the reference.
+
 ## What Booky must do
 
 1. **No date in the message:** say it's a booking assistant and ask which date they'd like. Don't book anything.
@@ -24,4 +26,4 @@ Build **Booky**, a Telegram bot that books appointments into a Google Calendar. 
 
 ## Scoring
 
-2 sample tests show their full input and output. The hidden tests cover the rules above with fresh dates and names every run, so hardcoding answers won't work. Every run sends real messages through your AI model and spends your tokens.
+2 sample tests show their full input and output. The hidden tests cover the rules above with fresh dates and names every run, so hardcoding answers won't work. Every run sends real messages through your AI model and spends your tokens. If the grading service is unavailable, the run is reported as a judge-side failure instead of receiving a score.

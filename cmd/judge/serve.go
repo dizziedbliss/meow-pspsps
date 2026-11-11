@@ -48,6 +48,10 @@ func judgeFromEnv() grade.Judge {
 			model = "gemini-2.5-flash"
 		}
 	}
+	// Never guess where a key belongs: unknown key formats require an explicit endpoint.
+	if key != "" && base == "" {
+		return nil
+	}
 	if j := grade.NewOpenAIJudge(base, key, model); j != nil {
 		return j
 	}
@@ -81,7 +85,7 @@ func cmdServe(args []string) error {
 	if j := judgeFromEnv(); j != nil {
 		cfg.Judge = j
 	} else {
-		log.Printf("warning: JUDGE_LLM_KEY is not set, so rubric checks are skipped (counted as passing)")
+		log.Printf("warning: rubric judge not configured; rubric tests cannot be scored")
 	}
 	for _, part := range strings.Split(*rounds, ",") {
 		if part = strings.TrimSpace(part); part == "" {
