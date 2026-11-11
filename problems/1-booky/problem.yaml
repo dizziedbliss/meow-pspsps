@@ -1,0 +1,8 @@
+id: booky
+title: "Booky: the Telegram booking bot"
+trigger: telegram
+timezone: Asia/Kolkata
+step_timeout_sec: 90
+# The judge simulates these: teams don't paste anything for them.
+mocked: [telegramApi, googleCalendarOAuth2Api]
+parallel: 2   # free Gemini keys allow ~15 requests/minute

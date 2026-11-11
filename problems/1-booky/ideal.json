@@ -1,0 +1,275 @@
+{
+  "name": "Event Cal",
+  "nodes": [
+    {
+      "parameters": {
+        "updates": [
+          "message"
+        ],
+        "additionalFields": {}
+      },
+      "type": "n8n-nodes-base.telegramTrigger",
+      "typeVersion": 1.5,
+      "position": [
+        0,
+        0
+      ],
+      "id": "e0908b40-8e1c-40c2-ba21-cbee26368a53",
+      "name": "Telegram Trigger",
+      "webhookId": "6d9b2528-8bf1-426d-a151-953bba2cab00",
+      "credentials": {
+        "telegramApi": {
+          "id": "u6ZNtkgfJyaXfGuH",
+          "name": "Telegram account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=You are \"Booky\", a friendly, witty booking agent for appointments. Talk like a fun human friend, not a corporate robot. Keep replies short, use light humor and an emoji or two. Never sound formal or boring.\n\nTODAY'S DATE: {{ $today.format('yyyy-MM-dd') }} ({{ $today.format('cccc') }})\nTIMEZONE: Asia/Kolkata\nCUSTOMER NAME: {{ $json.message.from.first_name }}\n\nCustomer message is in the user prompt. Follow these steps IN ORDER:\n\nmessage:{\n{{ $json.message.text }}\n}\nSTEP 1 - FIND THE DATE\nLook for a date in the customer's message. Convert things like \"tomorrow\", \"next Friday\" or \"5th Nov\" into YYYY-MM-DD using today's date above.\n- If there is NO date: say you're a booking agent and ask which date they'd like. Stop here.\n\nSTEP 2 - VALIDATE THE DATE\n- If the date is TODAY: tell them cheerfully that same-day bookings aren't possible and ask for another day. Stop here.\n- If the date is in the past: tell them playfully that time travel isn't supported yet and ask for a future date. Stop here.\n\nSTEP 3 - CHECK THE CALENDAR\nUse the \"Get Events\" calendar tool for that date (00:00 to 23:59).\n- If the day has ANY existing booking or a holiday: say sorry and ask them to choose another day. Do NOT create an event. Stop here.\n- If the day is free: go to Step 4.\n\nSTEP 4 - BOOK IT\nUse the \"Create Event\" calendar tool:\n- Summary: \"Appointment - {CUSTOMER NAME}\"\n- Start/End: that date (all-day, or the time they gave)\nOnly AFTER the event is created successfully, go to Step 5.\n\nSTEP 5 - REPLY\nALWAYS send a reply to the customer confirming the booking and clearly mention the date (e.g. \"Friday, 6 Nov 2026\"). Never end with an empty message.\n\nOUTPUT RULES\n- Reply with ONLY the message for the customer, nothing else.\n- Plain text, no markdown symbols like ** or ##, no JSON, no mention of tools or steps.\n- Dates written in a friendly format, like \"Friday, 6 Nov 2026\".\n\nNEVER show your reasoning, steps or analysis. Output ONLY the final message to the customer, nothing else. Never repeat the message twice.\nIf the customer asks \"what dates are free\", use the Get Events tool to check the next 7 days and suggest the free ones (not today).",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3.1,
+      "position": [
+        224,
+        0
+      ],
+      "id": "35062778-8254-4361-978b-40c29e8a6555",
+      "name": "AI Agent"
+    },
+    {
+      "parameters": {
+        "modelName": "models/gemini-3.5-flash-lite",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
+      "typeVersion": 1.2,
+      "position": [
+        96,
+        208
+      ],
+      "id": "c3b5b51f-73e2-4160-a212-96b03487ed5f",
+      "name": "Google Gemini Chat Model",
+      "credentials": {
+        "googlePalmApi": {
+          "id": null,
+          "name": "",
+          "__aiGatewayManaged": true
+        }
+      }
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "n8n-nodes-base.dateTimeTool",
+      "typeVersion": 2,
+      "position": [
+        368,
+        336
+      ],
+      "id": "bddb19e5-e71c-41ec-b562-b289765c1073",
+      "name": "Date & Time"
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $('Telegram Trigger').item.json.message.chat.id }}",
+        "text": "={{ $json.output }}",
+        "additionalFields": {}
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        592,
+        0
+      ],
+      "id": "86470fa8-e215-4a99-bd7a-5147ff45ab98",
+      "name": "Send a text message",
+      "webhookId": "8c3a76ed-580f-42ae-9a8d-872de38bfd18",
+      "credentials": {
+        "telegramApi": {
+          "id": "u6ZNtkgfJyaXfGuH",
+          "name": "Telegram account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "calendar",
+        "calendar": {
+          "__rl": true,
+          "value": "classroom108028313718745161694@group.calendar.google.com",
+          "mode": "list",
+          "cachedResultName": "HI Hi"
+        },
+        "timeMin": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('Start_Time', ``, 'string') }}",
+        "timeMax": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('End_Time', ``, 'string') }}",
+        "options": {
+          "timezone": {
+            "__rl": true,
+            "value": "Asia/Kolkata",
+            "mode": "list",
+            "cachedResultName": "Asia/Kolkata"
+          }
+        }
+      },
+      "type": "n8n-nodes-base.googleCalendarTool",
+      "typeVersion": 1.3,
+      "position": [
+        368,
+        528
+      ],
+      "id": "74b8d3f6-da5d-486c-b68d-4455a2a217f2",
+      "name": "Get availability in a calendar in Google Calendar",
+      "credentials": {
+        "googleCalendarOAuth2Api": {
+          "id": "SlXNuWWczWX03T55",
+          "name": "Google Calendar account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "calendar": {
+          "__rl": true,
+          "value": "classroom108028313718745161694@group.calendar.google.com",
+          "mode": "list",
+          "cachedResultName": "HI Hi"
+        },
+        "start": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('Start', ``, 'string') }}",
+        "end": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('End', ``, 'string') }}",
+        "additionalFields": {
+          "summary": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('Summary', ``, 'string') }}"
+        }
+      },
+      "type": "n8n-nodes-base.googleCalendarTool",
+      "typeVersion": 1.3,
+      "position": [
+        480,
+        208
+      ],
+      "id": "b568630d-d01e-470b-a1d7-456843177a0a",
+      "name": "Create an event in Google Calendar",
+      "credentials": {
+        "googleCalendarOAuth2Api": {
+          "id": "SlXNuWWczWX03T55",
+          "name": "Google Calendar account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "sessionIdType": "customKey",
+        "sessionKey": "={{ $json.message.chat.id }}",
+        "contextWindowLength": 20
+      },
+      "type": "@n8n/n8n-nodes-langchain.memoryBufferWindow",
+      "typeVersion": 1.4,
+      "position": [
+        352,
+        160
+      ],
+      "id": "0554471e-13bc-41e0-a42a-8be1bcbfd8ca",
+      "name": "Simple Memory"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Telegram Trigger": {
+      "main": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Google Gemini Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Date & Time": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Agent": {
+      "main": [
+        [
+          {
+            "node": "Send a text message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get availability in a calendar in Google Calendar": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create an event in Google Calendar": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Simple Memory": {
+      "ai_memory": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_memory",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "timeSavedMode": "fixed",
+    "timezone": "Asia/Kolkata",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "versionId": "3885c98c-c181-4e3e-b9f0-86ab272bf52f",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "f92201d58ff9ecab9c65d24d036835f329b0ff3e6f9f9cb59dc3d59c4bdf30c2"
+  },
+  "nodeGroups": [],
+  "id": "qvz4f6cTVu1unwX6",
+  "tags": []
+}

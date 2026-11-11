@@ -1,0 +1,39 @@
+{
+  "name": "Dummy: order summary",
+  "nodes": [
+    {
+      "parameters": { "httpMethod": "POST", "path": "orders", "responseMode": "responseNode", "options": {} },
+      "id": "11111111-1111-4111-8111-111111111111",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [0, 0],
+      "webhookId": "aaaaaaaa-1111-4111-8111-111111111111"
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body || {};\nconst items = Array.isArray(body.items) ? body.items : null;\nif (!items) {\n  return [{ json: { error: 'items must be an array' } }];\n}\nlet total = 0; let top = null;\nfor (const it of items) {\n  const line = Number(it.qty) * Number(it.price);\n  total += line;\n  if (!top || Number(it.price) > Number(top.price)) top = it;\n}\nreturn [{ json: { customer: body.customer ?? null, item_count: items.length, total: Math.round(total * 100) / 100, most_expensive: top ? top.name : null } }];"
+      },
+      "id": "22222222-2222-4222-8222-222222222222",
+      "name": "Summarise",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [220, 0]
+    },
+    {
+      "parameters": { "respondWith": "json", "responseBody": "={{ JSON.stringify($json) }}", "options": { "responseCode": "={{ $json.error ? 400 : 200 }}" } },
+      "id": "33333333-3333-4333-8333-333333333333",
+      "name": "Respond",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [440, 0]
+    }
+  ],
+  "connections": {
+    "Webhook": { "main": [[{ "node": "Summarise", "type": "main", "index": 0 }]] },
+    "Summarise": { "main": [[{ "node": "Respond", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "pinData": {},
+  "active": false
+}

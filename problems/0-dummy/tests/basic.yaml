@@ -1,0 +1,97 @@
+- id: sample-two-items
+  category: basic
+  visible: true
+  steps:
+    - body: { customer: Asha, items: [ { name: pen, qty: 2, price: 1.5 }, { name: book, qty: 1, price: 12 } ] }
+  expect:
+    status: 200
+    json:
+      - { path: customer, equals: Asha }
+      - { path: item_count, equals: 2 }
+      - { path: total, equals: 15 }
+      - { path: most_expensive, equals: book }
+
+- id: sample-bad-items
+  category: "error: bad input"
+  visible: true
+  steps:
+    - body: { customer: Ravi, items: "not a list" }
+  expect:
+    status: 400
+    json:
+      - { path: error, type: string }
+
+- id: random-order
+  category: "basic: random values"
+  vars:
+    who: { name: true }
+    a: { word: true }
+    b: { word: true }
+    qa: { int: [1, 9] }
+    qb: { int: [1, 9] }
+    pa: { float: [1, 40] }
+    pb: { float: [41, 90] }
+  let:
+    - total: "{{round (add (mul .qa .pa) (mul .qb .pb))}}"
+  steps:
+    - body: { customer: "{{.who}}", items: [ { name: "{{.a}}", qty: "{{.qa}}", price: "{{.pa}}" }, { name: "{{.b}}x", qty: "{{.qb}}", price: "{{.pb}}" } ] }
+  expect:
+    status: 200
+    json:
+      - { path: customer, equals: "{{.who}}" }
+      - { path: total, equals: "{{.total}}", approx: 0.011 }
+      - { path: most_expensive, equals: "{{.b}}x" }
+
+- id: empty-items
+  category: "edge: empty list"
+  steps:
+    - body: { customer: Meera, items: [] }
+  expect:
+    status: 200
+    json:
+      - { path: item_count, equals: 0 }
+      - { path: total, equals: 0 }
+      - { path: most_expensive, type: "null" }
+
+- id: missing-items
+  category: "error: missing field"
+  steps:
+    - body: { customer: Kabir }
+  expect:
+    status: 400
+
+- id: malformed-json
+  category: "error: malformed body"
+  steps:
+    - raw: '{"customer": "Zoya", "items": [ {"name": "x"'
+  expect:
+    status_in: [400, 422]
+
+- id: unicode-name
+  category: "edge: unicode"
+  steps:
+    - body: { customer: "Zoë 🚀 राम", items: [ { name: "चाय", qty: 3, price: 0.1 } ] }
+  expect:
+    status: 200
+    json:
+      - { path: customer, equals: "Zoë 🚀 राम" }
+      - { path: total, equals: 0.3 }
+      - { path: most_expensive, equals: "चाय" }
+
+- id: many-items
+  category: "edge: large payload"
+  vars:
+    n: { int: [400, 600] }
+  let:
+    - total: "{{div (mul .n (add .n 1)) 2}}"
+  steps:
+    - body:
+        customer: Dev
+        items: '=json [{{range $i, $k := seq .n}}{{if $i}},{{end}}{"name":"i{{$k}}","qty":1,"price":{{$k}}}{{end}}]'
+  expect:
+    status: 200
+    max_ms: 8000
+    json:
+      - { path: item_count, equals: "{{.n}}" }
+      - { path: total, equals: "{{.total}}" }
+      - { path: most_expensive, equals: "i{{.n}}" }

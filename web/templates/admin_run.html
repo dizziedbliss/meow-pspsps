@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Run {{.Run.ID}} · n8n Judge</title>
+<link rel="stylesheet" href="/static/style.css">
+<script src="/static/theme.js"></script>
+</head>
+<body class="admin">
+<header class="top"><div class="wrap">
+  <a class="brand" href="/admin?round={{.Run.Round}}">← judge. <span>organisers</span></a>
+</div></header>
+<main class="wrap">
+  <h1>{{.Team.Code}} · run {{.Run.ID}}</h1>
+  <p class="muted">{{.Team.Name}} · round {{.Run.Round}} · {{.Run.Status}} · started {{ts .Run.Created}} · <b>{{pct .View.Passed .View.Total}}</b>
+   · <a href="/admin/runs/{{.Run.ID}}/workflow.json">download workflow JSON</a></p>
+  {{if .View.Invalid}}<pre class="notice bad">{{.View.Invalid}}</pre>{{end}}
+  {{if .View.Infra}}<p class="notice warn">{{.View.Infra}}</p>{{end}}
+  <section class="card">
+    <h2>Tests</h2>
+    {{range .View.Tests}}
+    <details>
+      <summary><span class="v {{.Verdict}}">{{.Verdict}}</span> {{.ID}} <span class="muted small">{{.Category}}{{if .Visible}} · sample{{end}} · {{.Ms}} ms</span></summary>
+      {{if .Error}}<p class="notice bad">{{.Error}}</p>{{end}}
+      {{range .Checks}}<p class="small">{{if .OK}}✓{{else}}✗{{end}} {{.What}} <span class="muted">{{.Detail}}</span></p>{{end}}
+      <h3>Input</h3><pre class="code">{{.Input}}</pre>
+      <h3>Actual</h3><pre class="code">{{.Actual}}</pre>
+    </details>
+    {{end}}
+  </section>
+  <section class="card">
+    <h2>All runs by this team this round</h2>
+    <div class="table-scroll"><table><thead><tr><th>Run</th><th>Time</th><th>Status</th><th>Score</th><th>Workflow</th></tr></thead><tbody>
+    {{range .Runs}}<tr><td><a href="/admin/runs/{{.ID}}">{{.ID}}</a></td><td>{{ts .Created}}</td><td>{{.Status}}</td><td>{{pct .Passed.Float64 .Total.Float64}}</td><td>{{.WfName.String}}</td></tr>{{end}}
+    </tbody></table></div>
+  </section>
+</main>
+</body>
+</html>

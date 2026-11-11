@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Organisers · n8n Judge</title>
+<link rel="stylesheet" href="/static/style.css">
+<script src="/static/theme.js"></script>
+</head>
+<body class="admin">
+<header class="top"><div class="wrap">
+  <span class="brand">judge. <span>organisers</span></span>
+  <span class="muted small">queue: {{.Queue}} · rubric judge: {{if .JudgeOn}}on{{else}}<b>off</b>{{end}}</span>
+</div></header>
+<main class="wrap">
+  {{if .Msg}}<p class="notice ok" role="status">{{.Msg}}</p>{{end}}
+  <section class="card">
+    <h2>Rounds</h2>
+    <div class="table-scroll"><table>
+      <thead><tr><th>Round</th><th>Problem</th><th>Status</th><th>Opened</th><th>Closed</th><th></th></tr></thead>
+      <tbody>
+      {{range .Rounds}}
+      <tr>
+        <td><a href="/admin?round={{.N}}">Round {{.N}}</a></td>
+        <td>{{index $.Titles .ProblemID}} <span class="muted small">({{.ProblemID}})</span></td>
+        <td><span class="pill {{.Status}}">{{.Status}}</span></td>
+        <td>{{ts .OpenedAt}}</td><td>{{ts .ClosedAt}}</td>
+        <td><form method="post" action="/admin/round" class="row">
+          <input type="hidden" name="n" value="{{.N}}">
+          {{if eq .Status "pending"}}<button name="action" value="open">Open round</button>{{end}}
+          {{if eq .Status "open"}}<button name="action" value="close">Close + auto-submit</button>{{end}}
+          {{if eq .Status "closed"}}<button class="secondary" name="action" value="reopen">Reopen</button>{{end}}
+        </form></td>
+      </tr>
+      {{end}}
+      </tbody>
+    </table></div>
+    <p class="small muted">Opening a round closes any other open round. Closing submits each team's latest finished run if they never pressed Submit.</p>
+  </section>
+
+  <section class="card">
+    <div class="row"><h2 class="flush">Teams · round {{.Selected}}</h2><span class="spacer"></span>
+      <a class="btn secondary" href="/admin?round={{.Selected}}">Refresh</a>
+      <a class="btn" href="/admin/export.csv?round={{.Selected}}">Download CSV</a></div>
+    <div class="table-scroll"><table>
+      <thead><tr><th>Team</th><th>Attempts</th><th>Invalid</th><th>Best</th><th>Latest</th><th>First 100%</th><th>Submitted</th><th>Last activity</th></tr></thead>
+      <tbody>
+      {{range .Rows}}
+      <tr>
+        <td><b>{{.Team.Code}}</b> <span class="muted small">{{.Team.Name}}</span></td>
+        <td>{{.Attempts}}</td><td>{{.Invalid}}</td>
+        <td>{{pct .Best .Total}}</td><td>{{pct .Latest .Total}}</td>
+        <td>{{ts .FirstFull}}</td>
+        <td>{{if .Sub}}<a href="/admin/runs/{{.Sub.RunID}}">{{pct .SubPassed .SubTotal}}</a> at {{ts .Sub.At}}{{if .Sub.Auto}} <span class="pill">auto</span>{{end}}{{else}}<span class="muted">–</span>{{end}}</td>
+        <td>{{ts .LastActivity}}</td>
+      </tr>
+      {{else}}<tr><td colspan="8" class="muted">No teams yet. Create them with <code>judge teams</code>.</td></tr>
+      {{end}}
+      </tbody>
+    </table></div>
+  </section>
+
+  <section class="card">
+    <h2>Test machines</h2>
+    {{range .Workers}}<p>{{.Name}} <span class="muted small">last asked for work {{.Ago}} ago</span></p>{{else}}<p class="muted">No worker has connected yet.</p>{{end}}
+  </section>
+</main>
+</body>
+</html>
