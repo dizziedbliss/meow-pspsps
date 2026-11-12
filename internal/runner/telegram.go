@@ -100,11 +100,11 @@ func runTelegramTest(ctx context.Context, cl *n8nClient, env *Env, job *Job, t *
 	if seed == nil {
 		seed = &mock.Seed{Timezone: "UTC"}
 	}
-	if err := mockPut(ctx, env.MockAdmin, tenant, seed); err != nil {
+	if err := mockPut(ctx, env, tenant, seed); err != nil {
 		tr.Steps = []StepResult{{ConnErr: "simulator: " + err.Error()}}
 		return tr, ""
 	}
-	defer mockDelete(env.MockAdmin, tenant)
+	defer mockDelete(env, tenant)
 
 	refs := map[string]workflow.CredRef{}
 	for k, v := range shared {
@@ -139,7 +139,7 @@ func runTelegramTest(ctx context.Context, cl *n8nClient, env *Env, job *Job, t *
 	// Publishing makes the Telegram Trigger call setWebhook on the simulator.
 	var snap *mock.Snapshot
 	for i := 0; i < 40; i++ {
-		snap, err = mockGet(ctx, env.MockAdmin, tenant)
+		snap, err = mockGet(ctx, env, tenant)
 		if err == nil && snap.Telegram.WebhookURL != "" {
 			break
 		}
@@ -164,6 +164,8 @@ func runTelegramTest(ctx context.Context, cl *n8nClient, env *Env, job *Job, t *
 		if sr.ExecError != "" {
 			if reRateLimit.MatchString(sr.ExecError) {
 				tr.RateLimited = true
+			} else if reModelBad.MatchString(sr.ExecError) {
+				tr.ModelProblem = true
 			} else if reKeyBad.MatchString(sr.ExecError) {
 				tr.KeyRejected = true
 			}
@@ -254,7 +256,7 @@ func telegramStep(ctx context.Context, cl *n8nClient, env *Env, tenant, wfID, ho
 		sr.TimedOut = true
 	}
 	time.Sleep(150 * time.Millisecond) // let the last sendMessage land
-	snap, err := mockGet(ctx, env.MockAdmin, tenant)
+	snap, err := mockGet(ctx, env, tenant)
 	if err != nil {
 		sr.ConnErr = "simulator: " + err.Error()
 		return sr, sentBefore
@@ -328,9 +330,11 @@ func latestExecError(ctx context.Context, cl *n8nClient, wfID string, sr *StepRe
 	return nil
 }
 
-func mockPut(ctx context.Context, admin, tenant string, seed *mock.Seed) error {
+func mockPut(ctx context.Context, env *Env, tenant string, seed *mock.Seed) error {
+	admin := env.MockAdmin
 	b, _ := json.Marshal(seed)
 	req, _ := http.NewRequestWithContext(ctx, "PUT", admin+"/admin/tenants/"+url.PathEscape(tenant), bytes.NewReader(b))
+	mockAuth(req, env)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return err
@@ -343,8 +347,10 @@ func mockPut(ctx context.Context, admin, tenant string, seed *mock.Seed) error {
 	return nil
 }
 
-func mockGet(ctx context.Context, admin, tenant string) (*mock.Snapshot, error) {
+func mockGet(ctx context.Context, env *Env, tenant string) (*mock.Snapshot, error) {
+	admin := env.MockAdmin
 	req, _ := http.NewRequestWithContext(ctx, "GET", admin+"/admin/tenants/"+url.PathEscape(tenant), nil)
+	mockAuth(req, env)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return nil, err
@@ -357,9 +363,18 @@ func mockGet(ctx context.Context, admin, tenant string) (*mock.Snapshot, error) 
 	return &s, json.NewDecoder(resp.Body).Decode(&s)
 }
 
-func mockDelete(admin, tenant string) {
+func mockDelete(env *Env, tenant string) {
+	admin := env.MockAdmin
 	req, _ := http.NewRequest("DELETE", admin+"/admin/tenants/"+url.PathEscape(tenant), nil)
+	mockAuth(req, env)
 	if resp, err := http.DefaultClient.Do(req); err == nil {
 		resp.Body.Close()
+	}
+}
+
+// mockAuth adds the per-worker admin token the simulator requires.
+func mockAuth(req *http.Request, env *Env) {
+	if env.MockToken != "" {
+		req.Header.Set("Authorization", "Bearer "+env.MockToken)
 	}
 }

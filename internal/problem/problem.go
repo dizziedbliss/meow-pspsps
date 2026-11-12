@@ -19,23 +19,37 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/dizziedbliss/meow-pspsps/internal/mock"
 	"github.com/dizziedbliss/meow-pspsps/internal/runner"
 	"github.com/dizziedbliss/meow-pspsps/internal/workflow"
 )
 
 // Problem is one problem statement plus its tests.
 type Problem struct {
-	ID             string               `yaml:"id"`
-	Title          string               `yaml:"title"`
-	Trigger        workflow.TriggerKind `yaml:"trigger"` // webhook | chat
-	Method         string               `yaml:"method"`  // webhook only; default POST
-	StepTimeoutSec int                  `yaml:"step_timeout_sec"`
-	Timezone       string               `yaml:"timezone"` // for date helpers and the fake calendar
-	Mocked         []string             `yaml:"mocked"`   // credential types the judge simulates
-	Parallel       int                  `yaml:"parallel"` // tests run at once per run (default 4); lower it for rate-limited LLMs
-	Statement      string               `yaml:"-"`        // statement.md, shown to teams
-	Tests          []*TestDef           `yaml:"-"`
-	Dir            string               `yaml:"-"`
+	ID             string                          `yaml:"id"`
+	Title          string                          `yaml:"title"`
+	Trigger        workflow.TriggerKind            `yaml:"trigger"` // webhook | chat
+	Method         string                          `yaml:"method"`  // webhook only; default POST
+	StepTimeoutSec int                             `yaml:"step_timeout_sec"`
+	Timezone       string                          `yaml:"timezone"`    // for date helpers and the fake calendar
+	Mocked         []string                        `yaml:"mocked"`      // credential types the judge simulates
+	Parallel       int                             `yaml:"parallel"`    // tests run at once per run (default 4); lower it for rate-limited LLMs
+	Entries        []workflow.Entry                `yaml:"entries"`     // several fixed webhooks (replaces the single trigger)
+	Isolate        bool                            `yaml:"isolate"`     // each test gets its own workflow copy and simulated accounts
+	Directory      map[string]Contact              `yaml:"directory"`   // alert recipients, keyed by slug
+	AlertRules     map[string][]string             `yaml:"alert_rules"` // severity → directory slugs; "$team" = the team the workflow chose
+	Sheets         map[string]mock.SeedSpreadsheet `yaml:"sheets"`      // simulated spreadsheets every test starts with ("*" = any id)
+	Ideal          []string                        `yaml:"-"`           // node types of ideal.json, for the feature diff
+	Statement      string                          `yaml:"-"`           // statement.md, shown to teams
+	Tests          []*TestDef                      `yaml:"-"`
+	Dir            string                          `yaml:"-"`
+}
+
+// Contact is one alert recipient in the problem's directory.
+type Contact struct {
+	Name  string `yaml:"name"`
+	Chat  string `yaml:"chat"`
+	Email string `yaml:"email"`
 }
 
 // TestDef is one test case as written in tests/*.yaml.
@@ -79,8 +93,10 @@ type StepDef struct {
 	Raw     string            `yaml:"raw"`
 	Session string            `yaml:"session"` // chat: a label; same label = same conversation
 	Message string            `yaml:"message"`
-	Chat    string            `yaml:"chat"` // telegram: a label; same label = same chat (and memory)
-	From    string            `yaml:"from"` // telegram: sender's first name
+	Entry   string            `yaml:"entry"`    // multi-entry problems: which required webhook to call
+	WaitSec int               `yaml:"wait_sec"` // pause before this step (e.g. let an SLA pass)
+	Chat    string            `yaml:"chat"`     // telegram: a label; same label = same chat (and memory)
+	From    string            `yaml:"from"`     // telegram: sender's first name
 	Expect  *Expect           `yaml:"expect"`
 }
 
@@ -93,8 +109,20 @@ type Expect struct {
 	NotContains []string    `yaml:"not_contains" json:"notContains,omitempty"`
 	Regex       []string    `yaml:"regex" json:"regex,omitempty"`
 	MaxMs       int         `yaml:"max_ms" json:"maxMs,omitempty"`
+	Mock        []PathCheck `yaml:"mock" json:"mock,omitempty"`                // checks on what the simulated services saw during this step
+	Alerts      *Alerts     `yaml:"alerts" json:"alerts,omitempty"`            // alerts sent must match the severity the workflow returned
 	Rubric      string      `yaml:"rubric" json:"rubric,omitempty"`            // LLM judge grades the answer
 	RubricField string      `yaml:"rubric_field" json:"rubricField,omitempty"` // JSON path to the answer; "" = body
+	// RubricFast: if the answer matches every one of these regexes (case-insensitive) the rubric passes
+	// without asking the LLM. A miss is never a fail by itself: the LLM then gets the final say.
+	RubricFast []string `yaml:"rubric_fast" json:"rubricFast,omitempty"`
+}
+
+// Alerts says where in the response to read the workflow's own severity and team; the sent Telegram
+// messages and emails are then compared with the problem's alert_rules and directory.
+type Alerts struct {
+	SeverityPath string `yaml:"severity" json:"severity"`
+	TeamPath     string `yaml:"team" json:"team"`
 }
 
 // PathCheck checks one value inside a JSON response. Path is dotted with [n] indexes; "" = root.
@@ -105,6 +133,7 @@ type PathCheck struct {
 	Contains    string   `yaml:"contains" json:"contains,omitempty"`
 	NotContains string   `yaml:"not_contains" json:"notContains,omitempty"`
 	Regex       string   `yaml:"regex" json:"regex,omitempty"`
+	NotRegex    string   `yaml:"not_regex" json:"notRegex,omitempty"`
 	Exists      *bool    `yaml:"exists" json:"exists,omitempty"`
 	Type        string   `yaml:"type" json:"type,omitempty"` // string|number|bool|array|object|null
 	Len         *int     `yaml:"len" json:"len,omitempty"`
@@ -176,6 +205,23 @@ func Load(dir string) (*Problem, error) {
 	if len(p.Tests) == 0 {
 		return nil, fmt.Errorf("%s: no tests found in tests/*.yaml", dir)
 	}
+	if len(p.Entries) > 0 {
+		names := map[string]bool{}
+		for _, e := range p.Entries {
+			names[e.Name] = true
+		}
+		for _, t := range p.Tests {
+			for i, st := range t.Steps {
+				if st.Entry == "" || !names[st.Entry] {
+					return nil, fmt.Errorf("%s: test %s step %d needs entry: one of the problem's entries", dir, t.ID, i+1)
+				}
+			}
+		}
+		p.Isolate = true
+	}
+	if ideal, err := os.ReadFile(filepath.Join(dir, "ideal.json")); err == nil {
+		p.Ideal = workflow.IdealTypes(ideal)
+	}
 	return p, nil
 }
 
@@ -195,6 +241,7 @@ func LoadAll(root string) (map[string]*Problem, error) {
 
 // Rendered is one test made concrete for one run.
 type Rendered struct {
+	Prob    *Problem
 	Def     *TestDef
 	Job     runner.JobTest
 	Expects []*Expect // one per step; nil = nothing checked on that step
@@ -204,11 +251,17 @@ type Rendered struct {
 // Render makes every test concrete for a run. The same seed always gives the same values, so the
 // central server re-renders at grading time instead of storing expected answers.
 func (p *Problem) Render(seed int64, runID int64) ([]*Rendered, error) {
+	return p.RenderAt(seed, runID, time.Now())
+}
+
+// RenderAt is Render with the reference "today" fixed, so a run renders the same dates when it is
+// executed and when it is graded, even across midnight.
+func (p *Problem) RenderAt(seed int64, runID int64, ref time.Time) ([]*Rendered, error) {
 	out := make([]*Rendered, 0, len(p.Tests))
 	loc, _ := time.LoadLocation(p.Timezone)
-	fm := funcsFor(loc)
+	fm := funcsFor(loc, ref)
 	for _, d := range p.Tests {
-		r, err := d.render(seed, runID, fm, p.Timezone)
+		r, err := d.render(p, seed, runID, fm, p.Timezone, p.dirVars())
 		if err != nil {
 			return nil, fmt.Errorf("test %s: %w", d.ID, err)
 		}
@@ -220,7 +273,7 @@ func (p *Problem) Render(seed int64, runID int64) ([]*Rendered, error) {
 var firstNames = []string{"Asha", "Ravi", "Meera", "Kabir", "Zoya", "Arjun", "Ishaan", "Priya", "Noor", "Dev", "Anika", "Rohan", "Sana", "Vikram", "Tara", "Omar"}
 var words = []string{"amber", "basil", "cobalt", "delta", "ember", "fjord", "garnet", "harbor", "indigo", "juniper", "kelp", "lumen", "mosaic", "nimbus", "onyx", "pepper", "quartz", "russet", "sable", "tundra"}
 
-func (d *TestDef) render(seed, runID int64, fm template.FuncMap, tz string) (*Rendered, error) {
+func (d *TestDef) render(p *Problem, seed, runID int64, fm template.FuncMap, tz string, dir map[string]any) (*Rendered, error) {
 	h := fnv.New64a()
 	h.Write([]byte(d.ID))
 	rng := rand.New(rand.NewSource(seed ^ int64(h.Sum64())))
@@ -261,7 +314,10 @@ func (d *TestDef) render(seed, runID int64, fm template.FuncMap, tz string) (*Re
 		}
 	}
 
-	r := &Rendered{Def: d, Vars: vars, Job: runner.JobTest{ID: d.ID}}
+	if len(dir) > 0 {
+		vars["dir"] = dir
+	}
+	r := &Rendered{Prob: p, Def: d, Vars: vars, Job: runner.JobTest{ID: d.ID}}
 	if len(d.Calendar) > 0 || tz != "" {
 		seed := &runner.MockSeed{Timezone: tz}
 		for _, c := range d.Calendar {
@@ -281,10 +337,11 @@ func (d *TestDef) render(seed, runID int64, fm template.FuncMap, tz string) (*Re
 			}
 			seed.Events = append(seed.Events, it)
 		}
+		seed.Sheets = p.Sheets
 		r.Job.Seed = seed
 	}
 	for i, s := range d.Steps {
-		js := runner.JobStep{Method: s.Method}
+		js := runner.JobStep{Method: s.Method, Entry: s.Entry, WaitSec: s.WaitSec}
 		var err error
 		if js.Query, err = renderMapF(fm, s.Query, vars); err != nil {
 			return nil, err
@@ -388,13 +445,13 @@ var baseFuncs = template.FuncMap{
 
 // funcsFor adds date helpers relative to today in the problem's timezone. N is a day offset:
 // day 0 = today "2006-01-02", pretty 1 = "Friday, 6 Nov 2026", dom/month/mon/weekday/year parts.
-func funcsFor(loc *time.Location) template.FuncMap {
+func funcsFor(loc *time.Location, ref time.Time) template.FuncMap {
 	fm := template.FuncMap{}
 	for k, v := range baseFuncs {
 		fm[k] = v
 	}
 	at := func(n any) time.Time {
-		t := time.Now().In(loc)
+		t := ref.In(loc)
 		return time.Date(t.Year(), t.Month(), t.Day(), 12, 0, 0, 0, loc).AddDate(0, 0, int(num(n)))
 	}
 	fm["day"] = func(n any) string { return at(n).Format("2006-01-02") }
@@ -529,5 +586,21 @@ func renderMapF(fm template.FuncMap, m map[string]string, vars map[string]any) (
 
 // Expect is what the workflow pre-check needs to know about this problem.
 func (p *Problem) Expect() workflow.Expect {
-	return workflow.Expect{Trigger: p.Trigger, Method: p.Method, Mocked: p.Mocked}
+	return workflow.Expect{Trigger: p.Trigger, Method: p.Method, Mocked: p.Mocked, Entries: p.Entries, Ideal: p.Ideal}
+}
+
+// dirVars exposes the directory to templates as {{.dir.supervisor.chat}} and so on.
+func (p *Problem) dirVars() map[string]any {
+	out := map[string]any{}
+	for k, c := range p.Directory {
+		out[k] = map[string]any{"name": c.Name, "chat": c.Chat, "email": c.Email}
+	}
+	return out
+}
+
+// NewJob builds the worker job for a run of this problem: trigger, entries, credentials and limits.
+// Callers add the tests (from Render) afterwards.
+func (p *Problem) NewJob(runID int64, wf []byte, an workflow.Analysis, creds map[string]map[string]string) *runner.Job {
+	return &runner.Job{RunID: runID, Workflow: wf, Trigger: an.Trigger, Needs: an.Needs, Creds: creds,
+		StepTimout: p.StepTimeoutSec, Parallel: p.Parallel, Entries: an.Entries, Isolate: p.Isolate, Timezone: p.Timezone, SheetHeaders: an.SheetHeaders}
 }

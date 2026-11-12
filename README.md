@@ -1,9 +1,8 @@
-# meow-pspsps: n8n workflow judge
+# VeryJudgyCat: n8n workflow judge for Automathon 2.0
 
-A LeetCode-style judge for n8n workflows. Teams upload an exported workflow, the judge runs it in a
-fresh n8n 2.47.4 container against sample and hidden tests, and shows a verdict per test. Teams can
-Run as often as they like; Submit is final per round. Organisers see attempts, scores and
-submissions, and can download a CSV.
+VeryJudgyCat is a LeetCode-style judge for n8n workflows, built for the Automathon 2.0 hackathon. Teams upload an exported workflow, the judge runs it in a
+fresh n8n 2.47.4 container against sample and hidden tests, and shows a verdict per sample test and how many hidden tests passed. Teams get free
+sample runs and 3 scored attempts per round (best counts). Organisers see attempts, scores, incidents and a leaderboard, and can download a CSV.
 
 ## Event-day runbook
 
@@ -24,34 +23,34 @@ Linux binary for another machine: `CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go buil
 
 ### 2. Central machine
 
+One command (after the build and `bin/judge bake`):
+
 ```bash
-bin/judge teams --db judge.db --count 100 --out teams.csv   # once; print teams.csv, keep it private
-export JUDGE_ADMIN_PASSWORD='<long random>'
-export JUDGE_WORKER_TOKEN='<another long random>'
-export JUDGE_LLM_KEY='<organiser key, used only for rubric grading>'   # optional; or JUDGE_LLM_KEY_FILE=path
-# A Google "AIza…" key automatically uses Gemini's OpenAI-compatible endpoint (gemini-2.5-flash).
-# export JUDGE_LLM_BASE=https://api.openai.com/v1  JUDGE_LLM_MODEL=gpt-4o-mini
-bin/judge serve --db judge.db --rounds 1=<p1>,2=<p2>,3=<p3> --local-pool 4
-cloudflared tunnel run --url http://127.0.0.1:8080 <tunnel-name>      # https://judge.<domain>
+deploy/start-central.sh --make-teams --pool 2        # first time: also creates the 86 team logins in teams.csv
+deploy/start-central.sh --pool 2                     # later restarts
 ```
 
-Rubric tests require a working judge; missing or unavailable grading fails the run as an infrastructure error rather than awarding points. Set `JUDGE_LLM_BASE` explicitly for key formats that are not recognized as Gemini keys.
+It generates the admin password and worker token once (`~/.config/meow-judge/admin.pw`, `worker.token`), starts the site with a fresh
+`event.db`, rounds `1=mess,2=2-emergency` and the grader list in `~/.config/meow-judge/grader.json`, and opens a Cloudflare tunnel
+(quick tunnel by default, `--tunnel NAME` for a named one). It prints the address teams open, the admin login and the exact command to
+add a worker PC. Stop it with `kill $(cat logs/central.pid logs/tunnel.pid)`. Print `teams.csv`, keep it private, never commit it.
+
+The grader provider is always explicit (`JUDGE_LLM_CONFIG=grader.json`: a list of providers tried in order, each with `base`, `model`,
+`key_file`, `gap_ms`; or `JUDGE_LLM_BASE` + `JUDGE_LLM_MODEL` + `JUDGE_LLM_KEY[_FILE]` for one). Nothing is guessed from a key prefix. For many Gemini keys use `"keys_file": "~/.config/meow-judge/gemini-keys.txt"` (one key per line, `#` comments allowed): each key becomes its own provider, used one after the other (a key that gets rate-limited rests for a minute while the next takes over). Use keys from different Google projects, since each project has its own free limit. A grader
+outage is a judge-side failure: the attempt is refunded, never scored zero.
 
 ### 3. Other workers
 
-```bash
-bin/judge worker --central https://judge.<domain> --token "$JUDGE_WORKER_TOKEN" --pool 20 --name r740
-```
-
+Linux PCs without Docker: `sudo ./veryjudgycat.sh install` from the worker bundle (see the section at the end). A machine that already has
+Docker and the baked images can also run `bin/judge worker --central https://<site> --token <worker token> --pool 2`.
 They show up under "Test machines" on `/admin`. Workers only make outbound HTTPS calls.
 
 ### 4. During the event
 
-- `/admin`: open round 1. Opening another round closes the open one. Closing a round
-  auto-submits each team's latest finished run if they never pressed Submit.
-- Teams log in at `/` with the code and password from `teams.csv`.
-- "Download CSV" per round gives attempts, best and latest score, first 100% time, submission and
-  whether it was automatic. Each run's workflow JSON can be downloaded from its detail page.
+- `/admin`: open round 1. Opening another round closes the open one. Set marks per test and the maximum per round, enter offline
+  scores per team, and choose which rounds `/board` shows. Open incidents (things that broke on our side) are listed at the top.
+- Teams log in at `/` with the code and password from `teams.csv`: 3 scored attempts per round (best counts), unlimited free samples.
+- "Download CSV" gives the leaderboard with judge and offline scores per round. Each run's workflow JSON is on its detail page.
 
 ### If something breaks
 
@@ -70,3 +69,18 @@ for the LLM judge. Always prove the reference workflow passes:
 ```bash
 bin/judge check --problem problems/<dir> --workflow problems/<dir>/ideal.json --times 3
 ```
+
+### Worker PCs (college lab, Linux, no Docker yet)
+
+On the organiser machine, after the final build and bake: `./deploy/make-bundle.sh` writes `dist/worker-bundle/` (about 350 MB:
+the Linux binary, the saved judge images, install and uninstall scripts). Copy that folder to each PC (USB, shared drive or
+`python3 -m http.server`), boot Linux, and run:
+
+    sudo ./install.sh --central https://<site> --token <worker token> --pool 2     # --dry-run shows the steps first
+
+It installs Docker from the distro repos if missing (Debian/Ubuntu; elsewhere install Docker and add `--skip-docker`), loads the images,
+and starts a `veryjudgycat-worker` service. The token sits in a root-only file. Pool 2 suits a 6 GB PC. After the event:
+
+    sudo ./uninstall.sh      # stops the service, removes containers, images, /opt/veryjudgycat, and Docker if we installed it (`--keep-docker` to keep it)
+
+Then delete the copied folder. Not yet tried on a real lab PC: test `install.sh` and `uninstall.sh` on one PC before the event.

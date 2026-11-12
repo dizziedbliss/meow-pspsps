@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>n8n Judge</title>
+<title>VeryJudgyCat · Automathon 2.0</title>
 <link rel="preload" href="/static/fonts/jakarta.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="/static/style.css">
 <script src="/static/theme.js"></script>
@@ -16,7 +16,7 @@
 <div class="app-root shell">
   <div id="boot" class="boot" role="status" aria-live="polite">
     <div class="boot-card">
-      <span class="logo">judge<i>.</i></span>
+      <span class="logo">VeryJudgyCat<i>.</i></span>
       <ul class="boot-steps" id="bootSteps"></ul>
       <div class="bar"><i id="bootBar"></i></div>
     </div>
@@ -24,7 +24,7 @@
 
   <div class="panel">
     <div class="topbar">
-      <a class="logo" href="/">judge<i>.</i></a>
+      <a class="logo" href="/">VeryJudgyCat<i>.</i></a>
       <span class="spacer"></span>
       <span class="chip" id="workersChip"><span class="dot" id="workersDot"></span><span id="workersText">Checking test machines…</span></span>
       <span class="chip yellow">{{.Team.Name}}</span>
@@ -38,6 +38,11 @@
         <h1 class="title" id="title">Hang tight</h1>
         <div class="meta-chips" id="metaChips"></div>
         <article class="statement" id="statement"><p class="muted">The problem appears here as soon as the organisers open the round. This page checks every few seconds.</p></article>
+        <details class="how">
+          <summary>How this works</summary>
+          <p>Build your workflow with the required Webhooks (download the starter above), export it and upload it. Free <b>samples</b> run the visible tests; you get <b>3 scored attempts</b> per round and your best one counts. If something fails on our side, the attempt is refunded.</p>
+          <p><b>Your keys</b> stay in this browser tab, are held in server memory only during a run, and are never saved or logged. Use a limited key, and <b>rotate or delete it after the event</b>.</p>
+        </details>
       </section>
 
       <div class="rule" aria-hidden="true"><span class="marker" id="marker">–</span></div>
@@ -49,9 +54,9 @@
         </div>
 
         <div id="openArea" class="hidden">
-          <div id="submittedCard" class="card hidden">
-            <h2>Submitted ✓</h2>
-            <p class="sub flush" id="submittedText"></p>
+          <div id="bestCard" class="card hidden">
+            <h2>Your score so far</h2>
+            <p class="sub flush" id="bestText"></p>
           </div>
 
           <div id="buildArea">
@@ -86,10 +91,14 @@
           </div>
 
           <div class="card" id="runCard">
-            <h2><span class="step-n">3</span>Run the tests</h2>
+            <h2><span class="step-n">3</span>Run your workflow</h2>
             <p class="sub" id="runSub"></p>
             <div class="notice warn" id="tokenWarn"><span class="ic">!</span><span id="tokenText"></span></div>
-            <button class="btn wide" type="button" id="runBtn" disabled>Run tests</button>
+            <div class="run-buttons">
+              <button class="btn secondary" type="button" id="sampleBtn" disabled>Run samples (free)</button>
+              <button class="btn" type="button" id="attemptBtn" disabled>Run attempt</button>
+            </div>
+            <p class="small muted" id="attemptInfo"></p>
             <p class="small muted flush" id="runHint"></p>
 
             <div id="progress" class="hidden">
@@ -102,11 +111,10 @@
             <ul class="tests" id="tests"></ul>
           </div>
 
-          <div class="card submit-card" id="submitCard">
-            <h2>Submit</h2>
-            <p class="sub">Submitting is <b>final</b> for this round. After that you can't run or submit again. Don't submit until you're happy. If you never submit, your latest run is submitted when the round ends.</p>
+          <div class="card" id="historyCard">
+            <h2>Your runs</h2>
+            <p class="sub">Samples are free. Your best finished attempt counts; an attempt that fails on our side is refunded.</p>
             <div class="history" id="history" aria-label="Your runs"></div>
-            <p><button class="btn wide" type="button" id="submitBtn" disabled>Pick a finished run to submit</button></p>
           </div>
         </div>
       </section>
@@ -115,12 +123,12 @@
 </div>
 
 <dialog id="confirm" aria-labelledby="confirmTitle">
-  <h2 id="confirmTitle">Submit this run?</h2>
+  <h2 id="confirmTitle">Run a scored attempt?</h2>
   <p id="confirmText" class="muted"></p>
   <div class="row">
     <button class="btn secondary" type="button" id="confirmNo">nevermind</button>
     <span class="spacer"></span>
-    <button class="btn" type="button" id="confirmYes">submit</button>
+    <button class="btn" type="button" id="confirmYes">run attempt</button>
   </div>
 </dialog>
 </body>

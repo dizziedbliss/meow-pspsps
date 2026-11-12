@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="refresh" content="15">
+<title>Leaderboard · VeryJudgyCat</title>
+<link rel="preload" href="/static/fonts/jakarta.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="/static/style.css">
+<script src="/static/theme.js"></script>
+</head>
+<body class="board">
+<main class="board-wrap">
+  <header class="board-head">
+    <div>
+      <span class="logo">VeryJudgyCat<i>.</i></span>
+      <h1>Automathon 2.0 · Leaderboard</h1>
+    </div>
+    <span class="chip"><span class="dot live"></span>live · updated {{.Now}}</span>
+  </header>
+  <div class="card board-card">
+    {{if .Rounds}}
+    <div class="table-scroll"><table class="board-table">
+      <thead><tr><th class="rank">#</th><th>Team</th>
+        {{range .Rounds}}<th class="num">Round {{.N}}</th>{{end}}
+        <th class="num">Total</th></tr></thead>
+      <tbody>
+      {{range $row := .Rows}}
+      <tr class="{{if le $row.Rank 3}}podium p{{$row.Rank}}{{end}}">
+        <td class="rank">{{$row.Rank}}</td>
+        <td><b>{{$row.Team.Name}}</b> <span class="muted small">{{$row.Team.Code}}</span></td>
+        {{range $.Rounds}}{{$sc := $row.Score .N}}<td class="num">{{if $sc.HasRun}}{{$sc.Judge}}{{else}}–{{end}}{{if $sc.Offline}} <span class="muted small">+{{$sc.Offline}}</span>{{end}}</td>{{end}}
+        <td class="num total">{{$row.Total}}</td>
+      </tr>
+      {{else}}<tr><td colspan="8" class="muted">No scores yet.</td></tr>{{end}}
+      </tbody>
+    </table></div>
+    <p class="small muted flush">Round columns show the judge score of each team's best attempt, plus the organisers' offline score.</p>
+    {{else}}
+    <h2>Scores appear here soon</h2>
+    <p class="sub flush">The organisers haven't released a round yet. This page refreshes by itself.</p>
+    {{end}}
+  </div>
+</main>
+</body>
+</html>

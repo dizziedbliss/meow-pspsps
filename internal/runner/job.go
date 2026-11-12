@@ -20,14 +20,18 @@ import (
 // Job is one Run: a team's workflow, their keys, and the test inputs. Expected outputs never leave
 // the central server; a worker only executes and reports raw results.
 type Job struct {
-	RunID      int64                        `json:"runId"`
-	Workflow   json.RawMessage              `json:"workflow"`
-	Trigger    workflow.Trigger             `json:"trigger"`
-	Needs      []workflow.CredNeed          `json:"needs"`
-	Creds      map[string]map[string]string `json:"creds"` // credential type → field → value
-	Tests      []JobTest                    `json:"tests"`
-	StepTimout int                          `json:"stepTimeoutSec"`
-	Parallel   int                          `json:"parallel,omitempty"`
+	RunID        int64                        `json:"runId"`
+	Workflow     json.RawMessage              `json:"workflow"`
+	Trigger      workflow.Trigger             `json:"trigger"`
+	Needs        []workflow.CredNeed          `json:"needs"`
+	Creds        map[string]map[string]string `json:"creds"` // credential type → field → value
+	Tests        []JobTest                    `json:"tests"`
+	StepTimout   int                          `json:"stepTimeoutSec"`
+	Parallel     int                          `json:"parallel,omitempty"`
+	Entries      []workflow.EntryNode         `json:"entries,omitempty"` // multi-entry problems
+	Isolate      bool                         `json:"isolate,omitempty"` // one workflow copy + simulated accounts per test
+	Timezone     string                       `json:"timezone,omitempty"`
+	SheetHeaders map[string][]string          `json:"sheetHeaders,omitempty"` // header rows to seed into the fake sheets (from the team's own column mappings)
 }
 
 func (j *Job) parallel() int {
@@ -60,6 +64,8 @@ type JobStep struct {
 	Session string            `json:"session,omitempty"` // chat session id
 	Message string            `json:"message,omitempty"` // chat / telegram text
 	From    string            `json:"from,omitempty"`    // telegram sender's first name
+	Entry   string            `json:"entry,omitempty"`   // multi-entry: which required webhook
+	WaitSec int               `json:"waitSec,omitempty"` // pause before the step
 }
 
 // Result is what a worker reports for a Job.
@@ -74,28 +80,34 @@ type Result struct {
 
 // TestResult is the raw outcome of one test.
 type TestResult struct {
-	ID          string       `json:"id"`
-	Steps       []StepResult `json:"steps"`
-	RateLimited bool         `json:"rateLimited,omitempty"`
-	KeyRejected bool         `json:"keyRejected,omitempty"`
-	Retried     bool         `json:"retried,omitempty"`
+	ID           string       `json:"id"`
+	Steps        []StepResult `json:"steps"`
+	RateLimited  bool         `json:"rateLimited,omitempty"`
+	KeyRejected  bool         `json:"keyRejected,omitempty"`
+	ModelProblem bool         `json:"modelProblem,omitempty"` // the team's AI model isn't available or lacks a feature their node needs
+	Retried      bool         `json:"retried,omitempty"`
 }
 
 // StepResult is one request's raw outcome.
 type StepResult struct {
-	Status     int    `json:"status"`
-	Body       string `json:"body"`
-	DurationMs int64  `json:"durationMs"`
-	TimedOut   bool   `json:"timedOut,omitempty"`
-	ConnErr    string `json:"connErr,omitempty"`
-	ExecError  string `json:"execError,omitempty"` // n8n's error message for this request, if it failed
-	ErrorNode  string `json:"errorNode,omitempty"`
-	Failed     bool   `json:"failed,omitempty"` // the n8n execution itself ended in error
+	Status      int    `json:"status"`
+	Body        string `json:"body"`
+	DurationMs  int64  `json:"durationMs"`
+	TimedOut    bool   `json:"timedOut,omitempty"`
+	ConnErr     string `json:"connErr,omitempty"`
+	ExecError   string `json:"execError,omitempty"` // n8n's error message for this request, if it failed
+	ErrorNode   string `json:"errorNode,omitempty"`
+	Infra       bool   `json:"infra,omitempty"`       // judge-side failure on this step (simulator etc.), never the team's fault
+	Failed      bool   `json:"failed,omitempty"`      // the n8n execution itself ended in error
+	Mock        string `json:"mock,omitempty"`        // JSON: what the simulated services saw during this step
+	ViaLastNode bool   `json:"viaLastNode,omitempty"` // the webhook answers immediately; Body is the last node's output instead
 }
 
 var (
 	reRateLimit = regexp.MustCompile(`(?i)\b429\b|rate.?limit|quota|too many requests|resource.?exhausted|overloaded`)
-	reKeyBad    = regexp.MustCompile(`(?i)authorization failed|incorrect api key|invalid api key|api key not valid|invalid x-api-key|\b401\b|unauthorized|permission denied`)
+	// The model name is retired, unknown to the provider, or can't do what the node asks (tools, JSON output).
+	reModelBad = regexp.MustCompile(`(?i)(model|models/)[^\n]{0,80}(not found|does not exist|doesn't exist|not supported|unsupported|deprecated|decommissioned|retired|no longer (available|supported)|is not available)|unknown model|invalid model|model_not_found|does not support (tools|tool|function|structured|json|response_format)|(tools?|function calling|structured output|response_format)[^\n]{0,40}(not supported|unsupported)`)
+	reKeyBad   = regexp.MustCompile(`(?i)authorization failed|incorrect api key|invalid api key|api key not valid|invalid x-api-key|\b401\b|unauthorized|permission denied`)
 )
 
 const maxBody = 256 << 10 // keep at most 256 KB of each response
@@ -108,12 +120,16 @@ var noRedirect = &http.Client{CheckRedirect: func(*http.Request, []*http.Request
 type Env struct {
 	APIKey    string
 	MockAdmin string // http://127.0.0.1:<port> of this worker's mock (empty if none)
+	MockToken string // bearer token the mock's admin API requires
 }
 
 // Execute runs a job in an already-started container. The caller destroys the container after.
 func Execute(ctx context.Context, c *container, env *Env, job *Job) *Result {
 	if job.Trigger.Kind == workflow.TriggerTelegram {
 		return executeTelegram(ctx, c, env, job)
+	}
+	if job.Isolate {
+		return executeIsolated(ctx, c, env, job)
 	}
 	apiKey := env.APIKey
 	start := time.Now()
@@ -172,10 +188,16 @@ func Execute(ctx context.Context, c *container, env *Env, job *Job) *Result {
 		timeout = 30 * time.Second
 	}
 	res.Tests = make([]TestResult, len(job.Tests))
-	runTest := func(t JobTest) TestResult {
+	var nmu sync.Mutex
+	nonces := map[string][2]int{} // header nonce → (test, step); stays on this worker
+	runTest := func(ti int, t JobTest) TestResult {
 		tr := TestResult{ID: t.ID}
 		for si, st := range t.Steps {
-			tr.Steps = append(tr.Steps, doStep(ctx, url, job.Trigger, t.ID, si, st, timeout))
+			n := randHex(10)
+			nmu.Lock()
+			nonces[n] = [2]int{ti, si}
+			nmu.Unlock()
+			tr.Steps = append(tr.Steps, doStep(ctx, url, job.Trigger, n, si, st, timeout))
 		}
 		return tr
 	}
@@ -187,12 +209,12 @@ func Execute(ctx context.Context, c *container, env *Env, job *Job) *Result {
 			defer wg.Done()
 			sem <- struct{}{}
 			defer func() { <-sem }()
-			res.Tests[i] = runTest(t)
+			res.Tests[i] = runTest(i, t)
 		}(i, t)
 	}
 	wg.Wait()
 
-	attachExecErrors(ctx, cl, wfID, job, res)
+	attachExecErrors(ctx, cl, wfID, job, res, nonces)
 
 	// A 429 from the team's own key isn't their workflow's fault: wait, then try those tests once more.
 	var again []int
@@ -207,10 +229,10 @@ func Execute(ctx context.Context, c *container, env *Env, job *Job) *Result {
 		case <-ctx.Done():
 		}
 		for _, i := range again {
-			res.Tests[i] = runTest(job.Tests[i])
+			res.Tests[i] = runTest(i, job.Tests[i])
 			res.Tests[i].Retried = true
 		}
-		attachExecErrors(ctx, cl, wfID, job, res)
+		attachExecErrors(ctx, cl, wfID, job, res, nonces)
 	}
 	return res
 }
@@ -252,7 +274,7 @@ func notRegistered(status int, body []byte) bool {
 	return status == 404 && bytes.Contains(body, []byte("is not registered")) && !bytes.Contains(body, []byte("Did you mean"))
 }
 
-func doStep(ctx context.Context, url string, trig workflow.Trigger, testID string, idx int, st JobStep, timeout time.Duration) StepResult {
+func doStep(ctx context.Context, url string, trig workflow.Trigger, nonce string, idx int, st JobStep, timeout time.Duration) StepResult {
 	method := "POST"
 	var body []byte
 	headers := map[string]string{"Content-Type": "application/json"}
@@ -279,7 +301,7 @@ func doStep(ctx context.Context, url string, trig workflow.Trigger, testID strin
 	for k, v := range st.Headers {
 		headers[k] = v
 	}
-	headers["X-Judge-Test"] = fmt.Sprintf("%s/%d", testID, idx)
+	headers["X-Judge-Test"] = nonce // random per step; the test id never reaches the workflow
 
 	sctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
@@ -327,7 +349,7 @@ func doStep(ctx context.Context, url string, trig workflow.Trigger, testID strin
 
 // attachExecErrors finds failed executions and pins their error message on the step that caused
 // them, matched by the X-Judge-Test header (webhook) or session id (chat).
-func attachExecErrors(ctx context.Context, cl *n8nClient, wfID string, job *Job, res *Result) {
+func attachExecErrors(ctx context.Context, cl *n8nClient, wfID string, job *Job, res *Result, nonces map[string][2]int) {
 	execs, err := cl.executions(ctx, wfID, 250)
 	if err != nil {
 		return
@@ -339,10 +361,6 @@ func attachExecErrors(ctx context.Context, cl *n8nClient, wfID string, job *Job,
 				sessionStep[st.Session] = [2]int{ti, si}
 			}
 		}
-	}
-	testIdx := map[string]int{}
-	for i, t := range job.Tests {
-		testIdx[t.ID] = i
 	}
 	for _, e := range execs {
 		rd := e.Data.ResultData
@@ -367,7 +385,7 @@ func attachExecErrors(ctx context.Context, cl *n8nClient, wfID string, job *Job,
 		if msg == "" {
 			continue
 		}
-		ti, si, ok := locate(rd.RunData, job.Trigger.NodeName, testIdx, sessionStep)
+		ti, si, ok := locate(rd.RunData, job.Trigger.NodeName, nonces, sessionStep)
 		if !ok {
 			continue
 		}
@@ -379,13 +397,15 @@ func attachExecErrors(ctx context.Context, cl *n8nClient, wfID string, job *Job,
 		sr.Failed = e.Status == "error" || e.Status == "crashed"
 		if reRateLimit.MatchString(msg) {
 			res.Tests[ti].RateLimited = true
+		} else if reModelBad.MatchString(msg) {
+			res.Tests[ti].ModelProblem = true
 		} else if reKeyBad.MatchString(msg) {
 			res.Tests[ti].KeyRejected = true
 		}
 	}
 }
 
-func locate(runData map[string][]nodeRunRecord, trigger string, testIdx map[string]int, sessionStep map[string][2]int) (int, int, bool) {
+func locate(runData map[string][]nodeRunRecord, trigger string, nonces map[string][2]int, sessionStep map[string][2]int) (int, int, bool) {
 	runs := runData[trigger]
 	if len(runs) == 0 || len(runs[0].Data.Main) == 0 || len(runs[0].Data.Main[0]) == 0 {
 		return 0, 0, false
@@ -393,11 +413,8 @@ func locate(runData map[string][]nodeRunRecord, trigger string, testIdx map[stri
 	j := runs[0].Data.Main[0][0].JSON
 	if h, ok := j["headers"].(map[string]any); ok {
 		if v, ok := h["x-judge-test"].(string); ok {
-			id, step, found := strings.Cut(v, "/")
-			if ti, ok := testIdx[id]; found && ok {
-				var si int
-				fmt.Sscanf(step, "%d", &si)
-				return ti, si, true
+			if p, found := nonces[v]; found {
+				return p[0], p[1], true
 			}
 		}
 	}

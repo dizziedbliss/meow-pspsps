@@ -8,7 +8,7 @@
   let workflow = null;   // parsed workflow from upload or paste
   let analysis = null;
   let pollingRun = 0;
-  let shownRun = null;   // run currently displayed (and offered for Submit)
+  let shownRun = null;   // run currently displayed
   let runningSince = 0;  // when the shown run started running (client clock), for the stage animation
 
   // ---------- tiny DOM helpers (all text goes through textContent) ----------
@@ -99,6 +99,7 @@
 
   function render() {
     const s = state;
+    s.sampleWaitUntil = Date.now() + (s.sampleWait || 0) * 1000;
     $("n8nLabel").textContent = "n8n " + s.n8nVersion;
     $("workersText").textContent = s.workers ? `${s.workers} test slot${s.workers > 1 ? "s" : ""} online` : "No test machines online";
     $("workersDot").className = "dot " + (s.workers ? "live" : "off");
@@ -130,23 +131,23 @@
         el("span", { class: "chip", text: `${r.samples} sample tests` }),
         el("span", { class: "chip", text: `${r.hidden} hidden tests` }),
       );
+      if (r.hasStarter) {
+        chips.append(el("a", { class: "chip yellow", href: "/api/starter", download: "", text: "Download starter workflow" }));
+      }
       shownRun = null;
+      // Saved keys last for one round only.
+      try { for (const k of Object.keys(sessionStorage)) if (k.startsWith("cred:")) sessionStorage.removeItem(k); } catch { /* fine */ }
       drawOutline();
     }
     $("roundLabel").textContent = "Round " + r.n;
     $("marker").textContent = "R" + r.n;
-    $("runSub").textContent = `${r.samples + r.hidden} tests: the ${r.samples} samples show full input and output, hidden ones show only their category and verdict.`;
-    $("tokenText").textContent = `Every run sends about ${r.requests} requests through your workflow, so it spends your own AI tokens and quota. Runs are unlimited, but each one costs you.`;
+    $("runSub").textContent = `${r.samples} sample test${r.samples === 1 ? "" : "s"} show full input and output. ${r.hidden} more are hidden: you only see how many of them pass.`;
+    $("tokenText").textContent = `Every run sends about ${r.requests} requests through your workflow, so it spends your own AI tokens and quota. Samples are free of attempts but still cost your tokens.`;
 
-    const sub = s.submission;
-    show($("submittedCard"), !!sub);
-    show($("buildArea"), !sub);
-    show($("runBtn"), !sub);
-    show($("tokenWarn"), !sub);
-    show($("submitCard"), !sub);
-    if (sub) {
-      $("submittedText").textContent = `Run #${sub.runId} with ${sub.passed}/${sub.total} tests passing, at ${time(sub.at)}` +
-        (sub.auto ? ", submitted automatically when the round closed." : ". That's final for this round. Nice work.");
+    const best = s.best;
+    show($("bestCard"), !!best);
+    if (best) {
+      $("bestText").textContent = `Best attempt so far: run #${best.runId}, ${best.passed}/${best.total} tests passing, ${best.score} marks. Your best finished attempt is the one that counts.`;
     }
     renderHistory();
     if (s.inFlight && pollingRun !== s.inFlight) watchRun(s.inFlight);
@@ -161,23 +162,33 @@
       h.append(el("span", { class: "small", text: "No runs yet." }));
       return;
     }
-    for (const r of state.runs.slice(0, 12)) {
-      const label = r.status === "done" ? (r.invalid ? `#${r.id} · invalid` : `#${r.id} · ${r.passed}/${r.total}`) : `#${r.id} · ${r.status}`;
+    for (const r of state.runs.slice(0, 14)) {
+      const kind = r.kind === "sample" ? "sample" : "attempt";
+      let label = `#${r.id} · ${kind}`;
+      if (r.status === "done") label += r.invalid ? " · invalid" : ` · ${r.passed}/${r.total}`;
+      else if (r.status === "failed") label += " · our side failed";
+      else label += ` · ${r.status}`;
+      if (r.refunded) label += " · refunded";
       const b = el("button", { type: "button", text: label, "aria-current": shownRun && shownRun.id === r.id ? "true" : "false" });
       b.addEventListener("click", () => loadRun(r.id, true));
       h.append(b);
     }
   }
 
+  let sampleTimer = 0;
   function updateButtons() {
     const busy = !!(state && state.inFlight);
-    $("runBtn").disabled = busy || !analysis || (analysis.errors || []).length > 0;
-    $("runBtn").textContent = busy ? "Running…" : "Run tests";
+    const ready = !!analysis && !(analysis.errors || []).length;
+    const left = state && state.attempts ? state.attempts.left : 0;
+    const wait = state ? Math.max(0, (state.sampleWaitUntil || 0) - Date.now()) : 0;
+    $("sampleBtn").disabled = busy || !ready || wait > 0;
+    $("sampleBtn").textContent = wait > 0 ? `Samples again in ${Math.ceil(wait / 1000)} s` : "Run samples (free)";
+    $("attemptBtn").disabled = busy || !ready || left <= 0;
+    $("attemptBtn").textContent = busy ? "Running…" : left > 0 ? `Run attempt (${left} of ${state.attempts.max} left)` : "No attempts left";
+    $("attemptInfo").textContent = state && state.attempts ? `Attempts used: ${state.attempts.used} of ${state.attempts.max}. Only attempts are scored.` : "";
     $("runHint").textContent = !analysis && !busy ? "Upload a workflow first." : "";
-    const sb = $("submitBtn");
-    const ok = shownRun && shownRun.status === "done" && !shownRun.invalid && !state.submission;
-    sb.disabled = !ok;
-    sb.textContent = ok ? `Submit run #${shownRun.id} · ${shownRun.passed}/${shownRun.total}` : "Pick a finished run to submit";
+    clearTimeout(sampleTimer);
+    if (wait > 0) sampleTimer = setTimeout(updateButtons, 1000);
   }
 
   // ---------- workflow input ----------
@@ -219,6 +230,19 @@
     clear(out);
     for (const m of analysis.errors || []) out.append(el("p", { class: "notice bad reveal" }, el("span", { class: "ic", text: "✕" }), el("span", { text: m })));
     for (const m of analysis.warnings || []) out.append(el("p", { class: "notice warn reveal" }, el("span", { class: "ic", text: "!" }), el("span", { text: m })));
+    const required = (state && state.round && state.round.entries) || [];
+    if (required.length) {
+      const have = {};
+      for (const e of analysis.entries || []) have[e.name] = e;
+      const ul = el("ul", { class: "entries" });
+      for (const r of required) {
+        const f = have[r.name];
+        ul.append(el("li", { class: f ? "ok" : "bad", text: f
+          ? `✓ ${r.method || "POST"} /${r.path}  →  your node “${f.nodeName}”`
+          : `✕ ${r.method || "POST"} /${r.path}  not found: add a Webhook node with exactly this path` }));
+      }
+      out.append(el("p", { class: "small muted flush", text: "Webhooks the judge will call:" }), ul);
+    }
     if ((analysis.errors || []).length) {
       out.append(el("p", { class: "small muted", text: "Fix these in n8n, download the workflow again and re-upload." }));
       updateButtons();
@@ -226,7 +250,7 @@
     }
     const trig = analysis.trigger || {};
     out.append(el("p", { class: "notice ok reveal" }, el("span", { class: "ic", text: "✓" }),
-      el("span", { text: `Looks runnable. Entry point: ${triggerName(trig.kind)} “${trig.nodeName}”.` })));
+      el("span", { text: required.length ? `Looks runnable. All ${required.length} required webhooks are in your workflow.` : `Looks runnable. Entry point: ${triggerName(trig.kind)} “${trig.nodeName}”.` })));
     $("wfCard").classList.add("done");
     renderCreds(analysis.needs || []);
     updateButtons();
@@ -253,8 +277,11 @@
       }
       for (const f of need.fields || []) {
         const id = `cred-${need.type}-${f.name}`;
-        const input = el("input", { id, type: f.password ? "password" : "text", autocomplete: "off", spellcheck: "false",
-          placeholder: f.default ? f.default : f.password ? "paste your key" : "" });
+        // n8n's catalog leaves these optional, but a Header/Query/Basic Auth credential is useless without them.
+        if (ALWAYS_REQUIRED[need.type]?.includes(f.name)) f.required = true;
+        const secret = f.password || /key|secret|token|password|pass$|auth/i.test(f.name) || (need.type in ALWAYS_REQUIRED && f.name === "value");
+        const input = el("input", { id, type: secret ? "password" : "text", autocomplete: "off", spellcheck: "false",
+          placeholder: f.default ? f.default : secret ? "paste your key" : "" });
         input.dataset.type = need.type;
         input.dataset.field = f.name;
         input.value = store.get(`cred:${need.type}:${f.name}`) || f.default || "";
@@ -271,8 +298,10 @@
     card.classList.add("reveal");
   }
 
+  var ALWAYS_REQUIRED = { httpHeaderAuth: ["name", "value"], httpQueryAuth: ["name", "value"], httpBasicAuth: ["user", "password"] };
+
   // ---------- running ----------
-  async function startRun() {
+  async function startRun(kind) {
     if (!workflow || !analysis) return;
     const creds = {};
     let missing = null;
@@ -284,15 +313,16 @@
       if (input.required && !v && !missing) missing = input;
     }
     if (missing) { missing.focus(); $("runHint").textContent = "Fill in the highlighted credential first."; return; }
-    $("runBtn").disabled = true;
+    $("sampleBtn").disabled = $("attemptBtn").disabled = true;
     try {
-      const { runId } = await api("/api/run", { workflow, creds });
+      const { runId } = await api("/api/run", { workflow, creds, kind });
       state.inFlight = runId;
+      if (kind === "sample") state.sampleWaitUntil = Date.now() + 120000;
       updateButtons();
       watchRun(runId);
     } catch (e) {
+      await refresh();
       $("runHint").textContent = e.message;
-      updateButtons();
     }
   }
 
@@ -334,7 +364,7 @@
         const t = Date.now() - runningSince;
         if (t < 1400) setStage(1, "Spinning up a fresh n8n container just for this run");
         else if (t < 3000) setStage(2, "Importing your workflow and credentials, then publishing it");
-        else setStage(3, `Running ${state.round ? state.round.tests.length : ""} tests against your workflow`);
+        else setStage(3, `Running ${state.round ? state.round.samples + state.round.hidden : ""} tests against your workflow`);
       } else if (run.status === "grading") {
         setStage(4, "Grading the answers");
       } else {
@@ -362,7 +392,7 @@
 
   function verdictKind(v) {
     if (v === "Accepted") return "pass";
-    if (v === "Key Rate-Limited" || v === "Time Limit") return "warn";
+    if (v === "Key Rate-Limited" || v === "Time Limit" || v === "Model Unavailable") return "warn";
     return "fail";
   }
 
@@ -375,7 +405,7 @@
     if (run.status === "failed") {
       drawOutline(false);
       scoreBox.append(el("p", { class: "notice warn reveal" }, el("span", { class: "ic", text: "!" }),
-        el("span", { text: (run.infra || "The judge had a problem.") + " This run doesn't count against you." })));
+        el("span", { text: run.infra || "Something failed on our side. This attempt is refunded." })));
       return;
     }
     if (run.status !== "done") return;
@@ -416,30 +446,38 @@
     }
     num.textContent = String(run.passed);
 
-    if (run.tests.some((t) => t.verdict === "Key Rate-Limited")) {
+    if (run.hidden && run.hidden.total > 0) {
+      const hk = run.hidden.passed === run.hidden.total ? "pass" : "fail";
+      const hli = el("li", { class: "test hidden-summary " + hk }, tick(),
+        el("div", {}, el("div", { class: "name", text: `Hidden tests: ${run.hidden.passed} of ${run.hidden.total} passed` })),
+        el("span", { class: "row" }));
+      hli.querySelector(".tick").append(icon(hk));
+      list.append(hli);
+    }
+    const notes = run.notices || {};
+    if (run.refunded) {
+      scoreBox.append(el("p", { class: "notice ok" }, el("span", { class: "ic", text: "✓" }),
+        el("span", { text: "This attempt is refunded: it didn't use one of your attempts and won't count for your score." })));
+    }
+    if (notes.rateLimited) {
       scoreBox.append(el("p", { class: "notice warn" }, el("span", { class: "ic", text: "!" }),
         el("span", { text: "Your API key hit its rate limit even after a retry. Wait a minute or use a key with more quota, then run again." })));
     }
-    if (run.tests.some((t) => t.verdict === "Key Rejected")) {
+    if (notes.modelUnavailable) {
+      scoreBox.append(el("p", { class: "notice warn" }, el("span", { class: "ic", text: "!" }),
+        el("span", { text: "The AI model your workflow uses isn't available from your provider, or doesn't support what the node needs (tools or JSON output, for example). Pick another model in that node, or one your provider supports, then run again. A sample run shows the exact error, and it is free. Your prompt may need small changes for a different model." })));
+    }
+    if (notes.keyRejected) {
       scoreBox.append(el("p", { class: "notice bad" }, el("span", { class: "ic", text: "✕" }),
         el("span", { text: "Your LLM provider rejected the API key. Check it in step 2 and run again." })));
     }
   }
 
-  // ---------- submit ----------
-  function askSubmit() {
-    if (!shownRun) return;
-    $("confirmTitle").textContent = `Submit run #${shownRun.id}?`;
-    $("confirmText").textContent = `It passed ${shownRun.passed} of ${shownRun.total} tests. Submitting is final: you won't be able to run or submit again this round.`;
+  // ---------- scored attempt confirmation ----------
+  function askAttempt() {
+    const left = state.attempts.left;
+    $("confirmText").textContent = `This uses one of your ${left} remaining attempt${left > 1 ? "s" : ""} for this round and runs every test, hidden ones included. Your best finished attempt counts. Use "Run samples" to check your workflow first.`;
     $("confirm").showModal();
-  }
-
-  async function doSubmit() {
-    $("confirm").close();
-    try {
-      await api("/api/submit", { runId: shownRun.id });
-      await refresh();
-    } catch (e) { $("runHint").textContent = e.message; }
   }
 
   // ---------- wiring ----------
@@ -452,11 +490,11 @@
     drop.addEventListener("dragover", (e) => { e.preventDefault(); drop.classList.add("over"); });
     drop.addEventListener("dragleave", () => drop.classList.remove("over"));
     drop.addEventListener("drop", (e) => { e.preventDefault(); drop.classList.remove("over"); useFile(e.dataTransfer.files[0]); });
-    $("credCard").addEventListener("submit", (e) => { e.preventDefault(); startRun(); });
-    $("runBtn").addEventListener("click", startRun);
-    $("submitBtn").addEventListener("click", askSubmit);
+    $("credCard").addEventListener("submit", (e) => { e.preventDefault(); });
+    $("sampleBtn").addEventListener("click", () => startRun("sample"));
+    $("attemptBtn").addEventListener("click", askAttempt);
     $("confirmNo").addEventListener("click", () => $("confirm").close());
-    $("confirmYes").addEventListener("click", doSubmit);
+    $("confirmYes").addEventListener("click", () => { $("confirm").close(); startRun("attempt"); });
     $("themeBtn").addEventListener("click", () => {
       const root = document.documentElement;
       const dark = root.dataset.theme ? root.dataset.theme === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;

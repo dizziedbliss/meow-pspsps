@@ -13,7 +13,7 @@ Usage:
   judge check  --problem problems/<dir> --workflow wf.json [--cred type.field=value] [--times N]
   judge serve  [flags]                                     run the central site (see judge serve -h)
   judge worker --central https://judge.example --token T [--pool N]
-  judge teams  --db judge.db --count 100 [--out teams.csv] create team logins
+  judge teams  --db judge.db (--names names.txt | --count 100) [--out teams.csv] create team logins
 `
 
 func main() {

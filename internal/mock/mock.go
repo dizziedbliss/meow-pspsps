@@ -4,6 +4,7 @@
 package mock
 
 import (
+	"crypto/subtle"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -20,9 +21,10 @@ import (
 
 // Server holds every tenant's fake world.
 type Server struct {
-	mu      sync.Mutex
-	tenants map[string]*tenant
-	nextID  int
+	mu         sync.Mutex
+	tenants    map[string]*tenant
+	nextID     int
+	adminToken string
 }
 
 type tenant struct {
@@ -32,6 +34,12 @@ type tenant struct {
 	Webhook  struct{ URL, Secret string }
 	Sent     []Sent
 	Telegram []string // method names called
+
+	Spreadsheets  map[string]*spreadsheet
+	SheetTemplate *spreadsheet // the seed's "*" entry: what an unseen spreadsheet id starts as
+	SheetsCalls   []Call
+	Emails        []*Email
+	GmailCalls    []Call
 }
 
 // Event is a calendar event as the mock stores it.
@@ -61,8 +69,26 @@ type Sent struct {
 
 var attribution = regexp.MustCompile(`(?s)\s*_?This message was sent automatically with _?\[?n8n\]?(\([^)]*\))?\s*$`)
 
-// New returns an empty mock.
+// AdminTokenEnv is the environment variable the mock container reads its admin token from.
+const AdminTokenEnv = "MOCK_ADMIN_TOKEN"
+
+// New returns an empty mock. Call SetAdminToken before serving Handlers' admin side.
 func New() *Server { return &Server{tenants: map[string]*tenant{}} }
+
+// SetAdminToken sets the bearer token the admin API requires (`Authorization: Bearer <token>`).
+// Without one, every admin request is refused.
+func (s *Server) SetAdminToken(tok string) { s.adminToken = tok }
+
+func (s *Server) adminAuth(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+		if s.adminToken == "" || subtle.ConstantTimeCompare([]byte(got), []byte(s.adminToken)) != 1 {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
 
 // --- admin API (worker only) ------------------------------------------------------------------
 
@@ -70,6 +96,9 @@ func New() *Server { return &Server{tenants: map[string]*tenant{}} }
 type Seed struct {
 	Timezone string     `json:"timezone"`
 	Events   []SeedItem `json:"events"`
+	// Sheets seeds spreadsheets by id. The id "*" is a template for any id the workflow uses that
+	// isn't listed (teams point at their own document ids, so this is the usual choice).
+	Sheets map[string]SeedSpreadsheet `json:"sheets,omitempty"`
 }
 
 // SeedItem is a pre-existing calendar entry: an all-day date, or start/end date-times.
@@ -93,6 +122,14 @@ type Snapshot struct {
 		Created []*Event `json:"created"` // only what the workflow added
 		Calls   []Call   `json:"calls"`
 	} `json:"calendar"`
+	Sheets map[string]SnapSpreadsheet `json:"sheets"` // by spreadsheet id; only ones the seed or workflow touched
+	Gsheet struct {
+		Calls []Call `json:"calls"`
+	} `json:"sheetsApi"`
+	Email struct {
+		Sent  []*Email `json:"sent"`
+		Calls []Call   `json:"calls"`
+	} `json:"email"`
 }
 
 func (s *Server) admin(w http.ResponseWriter, r *http.Request) {
@@ -124,6 +161,17 @@ func (s *Server) admin(w http.ResponseWriter, r *http.Request) {
 			}
 			t.Events = append(t.Events, ev)
 		}
+		for sid, sd := range seed.Sheets {
+			ss := buildSpreadsheet(sid, sd)
+			if sid == "*" {
+				t.SheetTemplate = ss
+				continue
+			}
+			if t.Spreadsheets == nil {
+				t.Spreadsheets = map[string]*spreadsheet{}
+			}
+			t.Spreadsheets[sid] = ss
+		}
 		s.tenants[id] = t
 		w.WriteHeader(204)
 	case http.MethodGet:
@@ -147,6 +195,10 @@ func (s *Server) admin(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		snap.Calendar.Calls = append([]Call{}, t.Calls...)
+		snap.Sheets = t.snapshotSheets()
+		snap.Gsheet.Calls = append([]Call{}, t.SheetsCalls...)
+		snap.Email.Sent = append([]*Email{}, t.Emails...)
+		snap.Email.Calls = append([]Call{}, t.GmailCalls...)
 		writeJSON(w, 200, snap)
 	case http.MethodDelete:
 		delete(s.tenants, id)
@@ -225,6 +277,17 @@ func (s *Server) google(w http.ResponseWriter, r *http.Request) {
 	t := s.tenants[token]
 	if t == nil {
 		gErr(w, 401, "Invalid Credentials")
+		return
+	}
+	switch {
+	case strings.HasPrefix(r.URL.Path, "/v4/spreadsheets"):
+		s.sheets(w, r, t)
+		return
+	case strings.HasPrefix(r.URL.Path, "/gmail/v1/"):
+		s.gmail(w, r, t)
+		return
+	case strings.HasPrefix(r.URL.Path, "/drive/v3/"):
+		s.drive(w, r, t)
 		return
 	}
 	status := 200
@@ -472,7 +535,7 @@ func (s *Server) Handlers() (public http.Handler, admin http.Handler) {
 		s.google(w, r)
 	})
 	mux := http.NewServeMux()
-	mux.HandleFunc("/admin/tenants/", s.admin)
+	mux.Handle("/admin/tenants/", s.adminAuth(http.HandlerFunc(s.admin)))
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) { w.Write([]byte("ok")) })
 	return logged(public), mux
 }

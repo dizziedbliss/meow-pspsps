@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -28,34 +29,104 @@ import (
 	"github.com/dizziedbliss/meow-pspsps/internal/server"
 )
 
-// judgeFromEnv builds the rubric grader from JUDGE_LLM_KEY (or JUDGE_LLM_KEY_FILE), JUDGE_LLM_BASE
-// and JUDGE_LLM_MODEL. A Google "AIza…" key defaults to Gemini's OpenAI-compatible endpoint.
+// providerConfig is one grader provider in the JSON file named by JUDGE_LLM_CONFIG.
+type providerConfig struct {
+	Name     string `json:"name"`
+	Base     string `json:"base"`  // OpenAI-compatible base URL, e.g. https://generativelanguage.googleapis.com/v1beta/openai
+	Model    string `json:"model"` // exact model id
+	Key      string `json:"key"`   // or key_file; empty is fine for a local Ollama
+	KeyFile  string `json:"key_file"`
+	KeysFile string `json:"keys_file"` // many keys, one per line (# comments allowed): one provider per key, used one after the other
+	GapMs    int    `json:"gap_ms"`    // minimum time between calls (rate limit)
+	TimeoutS int    `json:"timeout_s"` // per call, default 60
+	Attempts int    `json:"attempts"`  // tries per call before failing over, default 2 when chained
+}
+
+// judgeFromEnv builds the rubric grader. Providers are always explicit; nothing is guessed from a key.
+//   - JUDGE_LLM_CONFIG=file.json: a JSON list of providers, tried in order (failover).
+//   - or one provider from JUDGE_LLM_BASE + JUDGE_LLM_MODEL + JUDGE_LLM_KEY / JUDGE_LLM_KEY_FILE.
 func judgeFromEnv() grade.Judge {
-	key := strings.TrimSpace(os.Getenv("JUDGE_LLM_KEY"))
-	if key == "" {
-		if f := os.Getenv("JUDGE_LLM_KEY_FILE"); f != "" {
-			if b, err := os.ReadFile(f); err == nil {
+	var cfgs []providerConfig
+	if f := os.Getenv("JUDGE_LLM_CONFIG"); f != "" {
+		b, err := os.ReadFile(f)
+		if err != nil {
+			log.Printf("grader: cannot read %s: %v", f, err)
+			return nil
+		}
+		if err := json.Unmarshal(b, &cfgs); err != nil {
+			log.Printf("grader: bad %s: %v", f, err)
+			return nil
+		}
+	} else {
+		cfgs = []providerConfig{{Name: "env", Base: os.Getenv("JUDGE_LLM_BASE"), Model: os.Getenv("JUDGE_LLM_MODEL"),
+			Key: os.Getenv("JUDGE_LLM_KEY"), KeyFile: os.Getenv("JUDGE_LLM_KEY_FILE")}}
+		if cfgs[0].Key == "" && cfgs[0].KeyFile == "" {
+			return nil // nothing configured: rubric tests are skipped (and fail as judge errors)
+		}
+	}
+	// keys_file expands into one provider per key (each key has its own rate limit).
+	var expanded []providerConfig
+	for _, c := range cfgs {
+		if c.KeysFile == "" {
+			expanded = append(expanded, c)
+			continue
+		}
+		path := c.KeysFile
+		if strings.HasPrefix(path, "~/") {
+			home, _ := os.UserHomeDir()
+			path = home + path[1:]
+		}
+		b, err := os.ReadFile(path)
+		if err != nil {
+			log.Printf("grader: provider %q: cannot read keys file: %v", c.Name, err)
+			continue
+		}
+		n := 0
+		for _, line := range strings.Split(string(b), "\n") {
+			if line = strings.TrimSpace(line); line == "" || strings.HasPrefix(line, "#") {
+				continue
+			}
+			n++
+			k := c
+			k.KeysFile, k.KeyFile, k.Key = "", "", line
+			k.Name = fmt.Sprintf("%s-%d", c.Name, n)
+			expanded = append(expanded, k)
+		}
+		log.Printf("grader: %s: %d keys from %s", c.Name, n, c.KeysFile)
+	}
+	cfgs = expanded
+	var ps []*grade.OpenAIJudge
+	for _, c := range cfgs {
+		key := strings.TrimSpace(c.Key)
+		if key == "" && c.KeyFile != "" {
+			path := c.KeyFile
+			if strings.HasPrefix(path, "~/") {
+				home, _ := os.UserHomeDir()
+				path = home + path[1:]
+			}
+			if b, err := os.ReadFile(path); err == nil {
 				key = strings.TrimSpace(string(b))
+			} else {
+				log.Printf("grader: provider %q: cannot read key file: %v", c.Name, err)
+				continue
 			}
 		}
-	}
-	base, model := os.Getenv("JUDGE_LLM_BASE"), os.Getenv("JUDGE_LLM_MODEL")
-	if strings.HasPrefix(key, "AIza") {
-		if base == "" {
-			base = "https://generativelanguage.googleapis.com/v1beta/openai"
+		attempts := c.Attempts
+		if attempts == 0 && len(cfgs) > 1 {
+			attempts = 2
 		}
-		if model == "" {
-			model = "gemini-2.5-flash"
+		p, err := grade.NewProvider(c.Name, c.Base, key, c.Model, time.Duration(c.GapMs)*time.Millisecond, time.Duration(c.TimeoutS)*time.Second, attempts)
+		if err != nil {
+			log.Printf("grader: %v", err)
+			continue
 		}
+		ps = append(ps, p)
 	}
-	// Never guess where a key belongs: unknown key formats require an explicit endpoint.
-	if key != "" && base == "" {
+	ch, err := grade.NewChain(ps...)
+	if err != nil {
 		return nil
 	}
-	if j := grade.NewOpenAIJudge(base, key, model); j != nil {
-		return j
-	}
-	return nil
+	return ch
 }
 
 func env(k, def string) string {
@@ -251,10 +322,10 @@ func report(ctx context.Context, central, tok string, res *runner.Result) error 
 func cmdTeams(args []string) error {
 	fs := flag.NewFlagSet("teams", flag.ExitOnError)
 	db := fs.String("db", env("JUDGE_DB", "judge.db"), "SQLite file")
-	count := fs.Int("count", 100, "how many teams")
+	count := fs.Int("count", 0, "how many teams (default: one per name in --names, else 100)")
 	prefix := fs.String("prefix", "T", "team code prefix")
 	start := fs.Int("start", 1, "first team number")
-	names := fs.String("names", "", "optional CSV with one team name per line (in order)")
+	names := fs.String("names", "", "file with one team name per line (in order); teams get random 10-character passwords")
 	out := fs.String("out", "teams.csv", "where to write code,name,password")
 	_ = fs.Parse(args)
 
@@ -262,21 +333,24 @@ func cmdTeams(args []string) error {
 	if err != nil {
 		return err
 	}
-	var nameList []string
+	var nameList, codeList []string
 	if *names != "" {
-		f, err := os.Open(*names)
+		raw, err := os.ReadFile(*names)
 		if err != nil {
 			return err
 		}
-		recs, err := csv.NewReader(f).ReadAll()
-		f.Close()
-		if err != nil {
-			return err
-		}
-		for _, r := range recs {
-			if len(r) > 0 && strings.TrimSpace(r[0]) != "" {
-				nameList = append(nameList, strings.TrimSpace(r[0]))
+		for _, line := range strings.Split(string(raw), "\n") {
+			if line = strings.TrimSpace(strings.Trim(line, "\r")); line != "" {
+				code, name := splitTeamLine(line)
+				codeList = append(codeList, code)
+				nameList = append(nameList, name)
 			}
+		}
+	}
+	if *count == 0 {
+		*count = 100
+		if len(nameList) > 0 {
+			*count = len(nameList)
 		}
 	}
 	f, err := os.OpenFile(*out, os.O_CREATE|os.O_WRONLY|os.O_EXCL, 0o600)
@@ -288,6 +362,9 @@ func cmdTeams(args []string) error {
 	_ = w.Write([]string{"code", "name", "password"})
 	for i := 0; i < *count; i++ {
 		code := fmt.Sprintf("%s%03d", *prefix, *start+i)
+		if i < len(codeList) && codeList[i] != "" {
+			code = codeList[i] // the names file gave this team its own code (e.g. AA07)
+		}
 		name := "Team " + code
 		if i < len(nameList) {
 			name = nameList[i]
@@ -313,4 +390,20 @@ func password() string {
 		b[i] = alphabet[n.Int64()]
 	}
 	return string(b)
+}
+
+var teamCodeRe = regexp.MustCompile(`^[A-Za-z]+[0-9]+$`)
+
+// splitTeamLine reads "AA07<tab>Guardians of git" (tab or two or more spaces) as code + name; a
+// line with no such code is just a name and gets a generated code.
+func splitTeamLine(line string) (code, name string) {
+	if i := strings.IndexAny(line, "\t"); i > 0 {
+		if c := strings.TrimSpace(line[:i]); teamCodeRe.MatchString(c) {
+			return strings.ToUpper(c), strings.TrimSpace(line[i+1:])
+		}
+	}
+	if f := strings.Fields(line); len(f) > 1 && teamCodeRe.MatchString(f[0]) && strings.Contains(line, f[0]+"  ") {
+		return strings.ToUpper(f[0]), strings.TrimSpace(strings.TrimPrefix(line, f[0]))
+	}
+	return "", line
 }

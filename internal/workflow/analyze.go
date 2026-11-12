@@ -21,10 +21,13 @@ type CredNeed struct {
 
 // Analysis is everything the judge learns from an upload before running it.
 type Analysis struct {
-	Trigger  Trigger    `json:"trigger"`
-	Needs    []CredNeed `json:"needs"`
-	Errors   []string   `json:"errors"`   // any error means Invalid Workflow; nothing runs
-	Warnings []string   `json:"warnings"` // shown, but the run goes ahead
+	Trigger      Trigger             `json:"trigger"`
+	Needs        []CredNeed          `json:"needs"`
+	SheetHeaders map[string][]string `json:"sheetHeaders,omitempty"` // tab → columns the team's Sheets nodes expect
+	Entries      []EntryNode         `json:"entries,omitempty"`      // multi-entry problems: required webhooks found in the workflow
+	Features     *Features           `json:"features,omitempty"`
+	Errors       []string            `json:"errors"`   // any error means Invalid Workflow; nothing runs
+	Warnings     []string            `json:"warnings"` // shown, but the run goes ahead
 }
 
 // Expect is what the problem requires of the workflow's entry point.
@@ -32,6 +35,8 @@ type Expect struct {
 	Trigger TriggerKind
 	Method  string   // webhook only
 	Mocked  []string // credential types the judge simulates (e.g. telegramApi, googleCalendarOAuth2Api)
+	Entries []Entry  // several required webhooks (replaces the single-trigger rules)
+	Ideal   []string // node types of the ideal workflow, for the feature diff
 }
 
 // webhookAuthCreds are the Webhook node's own auth credentials; the judge switches auth off instead.
@@ -41,8 +46,36 @@ var webhookAuthCreds = map[string]bool{"httpBasicAuth": true, "httpHeaderAuth": 
 func Analyze(w *Workflow, raw []byte, cat *catalog.Catalog, exp Expect) Analysis {
 	a := Analysis{Errors: []string{}, Warnings: ScanSecrets(raw)}
 
-	trig, err := w.FindTrigger()
-	if err != nil {
+	var trig Trigger
+	var err error
+	if len(exp.Entries) > 0 {
+		var errs []string
+		a.Entries, errs = w.MapEntries(exp.Entries)
+		a.Errors = append(a.Errors, errs...)
+		if len(a.Entries) > 0 {
+			trig = Trigger{Kind: TriggerWebhook, NodeName: a.Entries[0].NodeName, Method: "POST"}
+			a.Trigger = trig
+		}
+		if now := w.RespondsImmediately(a.Entries); len(now) > 0 {
+			a.Warnings = append(a.Warnings, "Webhook "+strings.Join(now, ", ")+" responds immediately, so the judge will use the output of the last node that ran as your answer. To control the reply exactly, set Respond to \"Using 'Respond to Webhook' node\" or \"When last node finishes\".")
+		}
+		if len(errs) == 0 { // with a required webhook missing these warnings would only mislead
+			if other := w.OtherTriggers(a.Entries); len(other) > 0 {
+				a.Warnings = append(a.Warnings, "These triggers are switched off while the judge tests: "+strings.Join(other, ", "))
+			}
+			if un := w.Unreachable(a.Entries); len(un) > 0 {
+				a.Warnings = append(a.Warnings, "Not reachable from any required webhook (never runs in tests): "+strings.Join(un, ", "))
+			}
+		}
+		f := w.Describe(a.Entries, exp.Ideal)
+		a.Features = &f
+		a.SheetHeaders = w.SheetHeaders()
+	} else {
+		trig, err = w.FindTrigger()
+	}
+	if len(exp.Entries) > 0 {
+		// entry rules handled above
+	} else if err != nil {
 		a.Errors = append(a.Errors, err.Error())
 	} else {
 		a.Trigger = trig
@@ -71,11 +104,18 @@ func Analyze(w *Workflow, raw []byte, cat *catalog.Catalog, exp Expect) Analysis
 		}
 	}
 
+	entryNode := map[string]bool{}
+	for _, e := range a.Entries {
+		entryNode[e.NodeName] = true
+	}
 	for _, n := range w.Nodes {
 		if disabled(n) {
 			continue
 		}
 		name, typ := str(n, "name"), str(n, "type")
+		if len(exp.Entries) > 0 && isTriggerType(typ) && !entryNode[name] {
+			continue // switched off during tests; its credentials and version don't matter
+		}
 		v := typeVersion(n)
 		known, vOK := cat.HasVersion(typ, v)
 		switch {
@@ -87,7 +127,7 @@ func Analyze(w *Workflow, raw []byte, cat *catalog.Catalog, exp Expect) Analysis
 			a.Errors = append(a.Errors, fmt.Sprintf("node %q is %s version %s, which the judge's n8n %s doesn't have (it has %s); re-add the node in n8n %s or older", name, typ, fmtVer(v), cat.N8nVersion, fmtVers(cat.Nodes[typ].Versions), cat.N8nVersion))
 		}
 
-		isTrigger := trig.NodeName == name
+		isTrigger := trig.NodeName == name || entryNode[name]
 		if creds, ok := n["credentials"].(map[string]any); ok && len(creds) > 0 {
 			for credType, ref := range creds {
 				if isTrigger && webhookAuthCreds[credType] {

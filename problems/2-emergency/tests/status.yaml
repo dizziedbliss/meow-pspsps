@@ -1,0 +1,132 @@
+# Status and escalation tests. A Critical fire report is used to create an incident to work on.
+
+- id: status-flow
+  category: Status
+  vars: {loc: {word: true}, ph: {int: [9000000000, 9999999999]}}
+  steps:
+    - &fire
+      entry: report
+      body: {name: Tara, phone: "{{.ph}}", location: "{{.loc}} Apartments, Block B", description: "There is a big fire on the second floor and the staircase is full of smoke. Two children are trapped inside and cannot get out."}
+      expect:
+        json:
+          - {path: status, equals: NEW}
+    - entry: status
+      body: {incident_id: "<<step1.incident_id>>", status: ACKNOWLEDGED, updated_by: Dr Rao}
+      expect:
+        json:
+          - {path: result, equals: UPDATED}
+          - {path: incident_id, equals: "<<step1.incident_id>>"}
+          - {path: previous_status, equals: NEW}
+          - {path: status, equals: ACKNOWLEDGED}
+    - entry: status
+      body: {incident_id: "<<step1.incident_id>>", status: in_progress, updated_by: Dr Rao}
+      expect:
+        json:
+          - {path: result, equals: UPDATED}
+          - {path: previous_status, equals: ACKNOWLEDGED}
+          - {path: status, equals: IN_PROGRESS}
+    - entry: status
+      body: {incident_id: "<<step1.incident_id>>", status: RESOLVED, updated_by: Dr Rao}
+      expect:
+        json:
+          - {path: result, equals: UPDATED}
+          - {path: previous_status, equals: IN_PROGRESS}
+          - {path: status, equals: RESOLVED}
+    - entry: status
+      body: {incident_id: "<<step1.incident_id>>", status: ACKNOWLEDGED, updated_by: Dr Rao}
+      expect:
+        json:
+          - {path: result, equals: INVALID_TRANSITION}
+          - {path: previous_status, equals: RESOLVED}
+          - {path: status, equals: RESOLVED}
+
+- id: status-invalid
+  category: Status
+  vars: {loc: {word: true}, ph: {int: [9000000000, 9999999999]}}
+  steps:
+    - <<: *fire
+    - entry: status
+      body: {incident_id: "<<step1.incident_id>>", status: IN_PROGRESS, updated_by: Dr Rao}
+      expect:
+        json:
+          - {path: result, equals: INVALID_TRANSITION}
+          - {path: previous_status, equals: NEW}
+          - {path: status, equals: NEW}
+    - entry: status
+      body: {incident_id: "<<step1.incident_id>>", status: DONE, updated_by: Dr Rao}
+      expect:
+        json:
+          - {path: result, equals: INVALID_REQUEST}
+    - entry: status
+      body: {updated_by: Dr Rao, status: ACKNOWLEDGED}
+      expect:
+        json:
+          - {path: result, equals: INVALID_REQUEST}
+
+- id: status-not-found
+  category: Status
+  vars: {id: {id: "NOPE-"}}
+  steps:
+    - entry: status
+      body: {incident_id: "{{.id}}", status: ACKNOWLEDGED, updated_by: Dr Rao}
+      expect:
+        json:
+          - {path: result, equals: NOT_FOUND}
+
+- id: escalate-nothing
+  category: Escalation
+  steps:
+    - entry: escalate
+      body: {}
+      expect:
+        json:
+          - {path: escalated_count, equals: 0}
+          - {path: escalated_incidents, type: array, len: 0}
+        mock:
+          - {path: telegram.sent, len: 0}
+          - {path: email.sent, len: 0}
+
+- id: escalate-overdue-once
+  category: Escalation
+  note: A Critical incident nobody acknowledges is escalated after 1 minute, once.
+  vars: {loc: {word: true}, ph: {int: [9000000000, 9999999999]}}
+  steps:
+    - <<: *fire
+    - entry: escalate
+      wait_sec: 70
+      body: {}
+      expect:
+        json:
+          - {path: escalated_count, equals: 1}
+          - {path: "escalated_incidents[0].incident_id", equals: "<<step1.incident_id>>"}
+          - {path: "escalated_incidents[0].severity", equals: Critical}
+        mock:
+          - {path: "", regex: "({{.dir.head.chat}}|dept-head@alerts.example)"}
+    - entry: escalate
+      body: {}
+      expect:
+        json:
+          - {path: escalated_count, equals: 0}
+        mock:
+          - {path: telegram.sent, len: 0}
+          - {path: email.sent, len: 0}
+
+- id: acknowledged-not-escalated
+  category: Escalation
+  vars: {loc: {word: true}, ph: {int: [9000000000, 9999999999]}}
+  steps:
+    - <<: *fire
+    - entry: status
+      body: {incident_id: "<<step1.incident_id>>", status: ACKNOWLEDGED, updated_by: Dr Rao}
+      expect:
+        json:
+          - {path: result, equals: UPDATED}
+    - entry: escalate
+      wait_sec: 70
+      body: {}
+      expect:
+        json:
+          - {path: escalated_count, equals: 0}
+        mock:
+          - {path: telegram.sent, len: 0}
+          - {path: email.sent, len: 0}

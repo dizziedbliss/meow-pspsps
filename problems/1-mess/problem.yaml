@@ -1,0 +1,11 @@
+id: mess
+title: "Round 1: Hostel Mess Feedback Loop"
+timezone: Asia/Kolkata
+step_timeout_sec: 60
+# Workflows are called through two fixed webhooks; each test gets its own copy and its own simulated
+# Google Sheets / Gmail account.
+entries:
+  - {name: feedback, path: mess-feedback, method: POST}
+  - {name: report, path: mess-report, method: POST}
+mocked: [googleSheetsOAuth2Api, gmailOAuth2]
+parallel: 3   # free Gemini keys allow ~15 requests/minute; only 3 tests call the AI

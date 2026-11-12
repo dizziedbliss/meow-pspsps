@@ -19,6 +19,28 @@ type OpenAIJudge struct {
 	Model   string
 	hc      *http.Client
 	sem     chan struct{}
+	// Name labels this provider in logs and chains.
+	Name string
+	// Attempts is how many times one call is tried on 429/5xx/network errors (default 3).
+	Attempts int
+	// Gap is the minimum time between two calls, to stay inside a provider's per-minute limit.
+	Gap time.Duration
+	// Timeout bounds one HTTP call (default 60s).
+	Timeout time.Duration
+	last    time.Time
+}
+
+// NewProvider is NewOpenAIJudge for explicit configs: base and model are required, the key may be
+// empty (a local Ollama needs none).
+func NewProvider(name, base, key, model string, gap, timeout time.Duration, attempts int) (*OpenAIJudge, error) {
+	if base == "" || model == "" {
+		return nil, fmt.Errorf("provider %q needs both a base URL and a model; nothing is guessed from the key", name)
+	}
+	if timeout <= 0 {
+		timeout = 60 * time.Second
+	}
+	return &OpenAIJudge{BaseURL: strings.TrimRight(base, "/"), APIKey: key, Model: model, Name: name, Gap: gap, Attempts: attempts,
+		Timeout: timeout, hc: &http.Client{Timeout: timeout}, sem: make(chan struct{}, 1)}, nil
 }
 
 // NewOpenAIJudge returns nil when no key is set, which means rubric checks are skipped.
@@ -44,12 +66,38 @@ Reply with JSON only: {"pass": true|false, "reason": "<one short sentence>"}`
 
 // Grade asks the model for a pass/fail verdict.
 func (j *OpenAIJudge) Grade(ctx context.Context, rubric, input, answer string) (bool, string, error) {
+	ok, reason, _, err := j.GradeInfo(ctx, rubric, input, answer)
+	return ok, reason, err
+}
+
+// GradeInfo is Grade plus which provider and model answered.
+func (j *OpenAIJudge) GradeInfo(ctx context.Context, rubric, input, answer string) (bool, string, JudgeInfo, error) {
+	info := JudgeInfo{Provider: j.Name, Model: j.Model}
+	ok, reason, err := j.grade(ctx, rubric, input, answer)
+	return ok, reason, info, err
+}
+
+func (j *OpenAIJudge) grade(ctx context.Context, rubric, input, answer string) (bool, string, error) {
 	select {
 	case j.sem <- struct{}{}:
 	case <-ctx.Done():
 		return false, "", ctx.Err()
 	}
 	defer func() { <-j.sem }()
+	if j.Gap > 0 { // pace calls; the semaphore makes this serial per provider
+		if wait := j.Gap - time.Since(j.last); wait > 0 {
+			select {
+			case <-time.After(wait):
+			case <-ctx.Done():
+				return false, "", ctx.Err()
+			}
+		}
+		defer func() { j.last = time.Now() }()
+	}
+	attempts := j.Attempts
+	if attempts <= 0 {
+		attempts = 3
+	}
 	user := fmt.Sprintf("RUBRIC:\n%s\n\nINPUT:\n%s\n\nANSWER:\n%s", rubric, clip(input, 6000), clip(answer, 6000))
 	body, _ := json.Marshal(map[string]any{
 		"model":           j.Model,
@@ -61,9 +109,11 @@ func (j *OpenAIJudge) Grade(ctx context.Context, rubric, input, answer string) (
 		},
 	})
 	var lastErr error
-	for attempt := 0; attempt < 5; attempt++ {
+	for attempt := 0; attempt < attempts; attempt++ {
 		req, _ := http.NewRequestWithContext(ctx, "POST", j.BaseURL+"/chat/completions", bytes.NewReader(body))
-		req.Header.Set("Authorization", "Bearer "+j.APIKey)
+		if j.APIKey != "" {
+			req.Header.Set("Authorization", "Bearer "+j.APIKey)
+		}
 		req.Header.Set("Content-Type", "application/json")
 		resp, err := j.hc.Do(req)
 		if err != nil {
@@ -75,9 +125,9 @@ func (j *OpenAIJudge) Grade(ctx context.Context, rubric, input, answer string) (
 		resp.Body.Close()
 		if resp.StatusCode == 429 || resp.StatusCode >= 500 {
 			lastErr = fmt.Errorf("judge LLM returned %d", resp.StatusCode)
-			if attempt < 4 {
+			if attempt < attempts-1 {
 				select {
-				case <-time.After(15 * time.Second):
+				case <-time.After(6 * time.Second): // short: a dead grader should refund the attempt in seconds, not minutes
 				case <-ctx.Done():
 					return false, "", ctx.Err()
 				}

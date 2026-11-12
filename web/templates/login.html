@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{{if .Admin}}Organiser login{{else}}Team login{{end}} · n8n Judge</title>
+<title>{{if .Admin}}Organiser login{{else}}Team login{{end}} · VeryJudgyCat</title>
 <link rel="preload" href="/static/fonts/jakarta.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="/static/style.css">
 <script src="/static/theme.js"></script>
@@ -10,9 +10,10 @@
 <body>
 <main class="login-wrap">
   <form class="login" method="post" action="{{if .Admin}}/admin/login{{else}}/login{{end}}">
-    <span class="logo">judge<i>.</i></span>
+    <span class="logo">VeryJudgyCat<i>.</i></span>
+    <p class="eyebrow flush">Automathon 2.0</p>
     <h1>{{if .Admin}}Organisers{{else}}Welcome, builders{{end}}</h1>
-    <p class="muted flush">{{if .Admin}}Rounds, scores and submissions.{{else}}Log in with the code and password on your team card.{{end}}</p>
+    <p class="muted flush">{{if .Admin}}Rounds, scores and the leaderboard.{{else}}Log in with the code and password on your team card.{{end}}</p>
     {{if .Error}}<p class="notice bad" role="alert"><span class="ic">✕</span><span>That didn't match. Check your team card and try again.</span></p>{{end}}
     {{if not .Admin}}
     <label for="code">Team code</label>

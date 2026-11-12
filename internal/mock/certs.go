@@ -13,7 +13,7 @@ import (
 
 // GoogleHosts are the names judge containers resolve to the mock (Gemini's host is NOT here: it
 // stays real so teams' own keys work).
-var GoogleHosts = []string{"www.googleapis.com", "oauth2.googleapis.com", "accounts.google.com"}
+var GoogleHosts = []string{"www.googleapis.com", "oauth2.googleapis.com", "accounts.google.com", "sheets.googleapis.com", "gmail.googleapis.com"}
 
 // Certs is a private CA and a server certificate for GoogleHosts, all PEM.
 type Certs struct {

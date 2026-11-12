@@ -36,11 +36,11 @@ func NewPool(ctx context.Context, cfg PoolConfig) (*Pool, error) {
 		cfg.Size = 1
 	}
 	cleanupStale(ctx)
-	admin, err := ensureMock(ctx)
+	admin, token, err := ensureMock(ctx)
 	if err != nil {
 		return nil, err
 	}
-	p := &Pool{cfg: cfg, env: &Env{APIKey: key, MockAdmin: admin}, ready: make(chan *container, cfg.Size), wake: make(chan struct{}, 1)}
+	p := &Pool{cfg: cfg, env: &Env{APIKey: key, MockAdmin: admin, MockToken: token}, ready: make(chan *container, cfg.Size), wake: make(chan struct{}, 1)}
 	go p.fill(ctx)
 	p.poke()
 	return p, nil

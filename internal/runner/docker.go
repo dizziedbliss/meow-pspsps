@@ -159,26 +159,27 @@ func imageAPIKey(ctx context.Context, image string) (string, error) {
 
 // ensureMock makes sure the judge network and this worker's mock container are up, and returns the
 // mock's admin URL on localhost.
-func ensureMock(ctx context.Context) (string, error) {
+func ensureMock(ctx context.Context) (adminURL, token string, err error) {
 	if _, err := docker(ctx, "network", "inspect", netName); err != nil {
 		if _, err := docker(ctx, "network", "create", "--subnet", netSubnet, "--label", "meow.judge.net=1", netName); err != nil {
-			return "", fmt.Errorf("create network %s: %w", netName, err)
+			return "", "", fmt.Errorf("create network %s: %w", netName, err)
 		}
 	}
 	if _, err := docker(ctx, "image", "inspect", MockImage); err != nil {
-		return "", fmt.Errorf("mock image %s missing; re-run `judge bake`", MockImage)
+		return "", "", fmt.Errorf("mock image %s missing; re-run `judge bake`", MockImage)
 	}
+	token = randHex(24) // per start; only this worker's runner knows it
 	name := "meow-judge-mock"
 	_, _ = docker(ctx, "rm", "-f", name)
 	if _, err := docker(ctx, "run", "-d", "--rm", "--name", name, "--network", netName, "--ip", mockIP,
 		"-p", "127.0.0.1::8080", "--memory", "256m", "--pids-limit", "256",
 		"--cap-drop", "ALL", "--cap-add", "NET_BIND_SERVICE", "--security-opt", "no-new-privileges",
-		"--label", "meow.judge=1", MockImage); err != nil {
-		return "", err
+		"-e", "MOCK_ADMIN_TOKEN="+token, "--label", "meow.judge=1", MockImage); err != nil {
+		return "", "", err
 	}
 	port, err := docker(ctx, "port", name, "8080/tcp")
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	base := "http://" + strings.SplitN(port, "\n", 2)[0]
 	hc := &http.Client{Timeout: 2 * time.Second}
@@ -186,11 +187,11 @@ func ensureMock(ctx context.Context) (string, error) {
 		if resp, err := hc.Get(base + "/healthz"); err == nil {
 			resp.Body.Close()
 			if resp.StatusCode == 200 {
-				return base, nil
+				return base, token, nil
 			}
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
 	logs, _ := docker(context.Background(), "logs", "--tail", "20", name)
-	return "", fmt.Errorf("mock didn't start; logs:\n%s", logs)
+	return "", "", fmt.Errorf("mock didn't start; logs:\n%s", logs)
 }

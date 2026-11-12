@@ -2,14 +2,15 @@
 <html lang="en">
 <head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Organisers · n8n Judge</title>
+<title>Organisers · VeryJudgyCat</title>
 <link rel="stylesheet" href="/static/style.css">
 <script src="/static/theme.js"></script>
 </head>
 <body class="admin">
 <header class="top"><div class="wrap">
-  <span class="brand">judge. <span>organisers</span></span>
-  <span class="muted small">queue: {{.Queue}} · rubric judge: {{if .JudgeOn}}on{{else}}<b>off</b>{{end}}</span>
+  <span class="brand">VeryJudgyCat <span>organisers</span></span>
+  {{if .OpenIncidents}}<a class="pill open" href="#incidents">{{.OpenIncidents}} open incident{{if gt .OpenIncidents 1}}s{{end}}</a>{{end}}
+  <span class="muted small">queue: {{.Queue}} · <a href="/board">leaderboard</a> · rubric judge: {{if .JudgeOn}}on{{else}}<b>off</b>{{end}}</span>
 </div></header>
 <main class="wrap">
   {{if .Msg}}<p class="notice ok" role="status">{{.Msg}}</p>{{end}}
@@ -27,34 +28,73 @@
         <td><form method="post" action="/admin/round" class="row">
           <input type="hidden" name="n" value="{{.N}}">
           {{if eq .Status "pending"}}<button name="action" value="open">Open round</button>{{end}}
-          {{if eq .Status "open"}}<button name="action" value="close">Close + auto-submit</button>{{end}}
+          {{if eq .Status "open"}}<button name="action" value="close">Close round</button>{{end}}
           {{if eq .Status "closed"}}<button class="secondary" name="action" value="reopen">Reopen</button>{{end}}
         </form></td>
       </tr>
       {{end}}
       </tbody>
     </table></div>
-    <p class="small muted">Opening a round closes any other open round. Closing submits each team's latest finished run if they never pressed Submit.</p>
+    <p class="small muted">Opening a round closes any other open round. Closing stops new runs; runs already in flight still finish and count. Each team's best counted attempt is its judge score.</p>
+  </section>
+
+  <section class="card">
+    <h2>Marks · round {{.Selected}}</h2>
+    <form method="post" action="/admin/round-settings" class="row">
+      <input type="hidden" name="n" value="{{.Selected}}">
+      <label class="inline">Marks per test <input class="num" type="text" name="marks_per_test" value="{{.SelRound.MarksPerTest}}" inputmode="decimal"></label>
+      <label class="inline">Max marks (0 = no cap) <input class="num" type="text" name="max_marks" value="{{.SelRound.MaxMarks}}" inputmode="decimal"></label>
+      <label class="inline check"><input type="checkbox" name="show_on_board" value="1" {{if .SelRound.ShowOnBoard}}checked{{end}}> Show this round on /board</label>
+      <button type="submit">Save</button>
+    </form>
+    <p class="small muted">Judge score = tests passed × marks per test, capped at max marks. Changing these rescores every run in the round.</p>
   </section>
 
   <section class="card">
     <div class="row"><h2 class="flush">Teams · round {{.Selected}}</h2><span class="spacer"></span>
       <a class="btn secondary" href="/admin?round={{.Selected}}">Refresh</a>
-      <a class="btn" href="/admin/export.csv?round={{.Selected}}">Download CSV</a></div>
+      <a class="btn" href="/admin/export.csv">Download leaderboard CSV</a></div>
     <div class="table-scroll"><table>
-      <thead><tr><th>Team</th><th>Attempts</th><th>Invalid</th><th>Best</th><th>Latest</th><th>First 100%</th><th>Submitted</th><th>Last activity</th></tr></thead>
+      <thead><tr><th>Team</th><th>Attempts</th><th>Samples</th><th>Best</th><th>Judge score</th><th>First 100%</th><th>Nodes</th><th>Integr.</th><th>Offline score</th><th>Last activity</th></tr></thead>
       <tbody>
       {{range .Rows}}
       <tr>
         <td><b>{{.Team.Code}}</b> <span class="muted small">{{.Team.Name}}</span></td>
-        <td>{{.Attempts}}</td><td>{{.Invalid}}</td>
-        <td>{{pct .Best .Total}}</td><td>{{pct .Latest .Total}}</td>
+        <td>{{.Attempts}}/{{$.MaxAttempts}}{{if .Refunded}} <span class="pill" title="refunded attempts">+{{.Refunded}} refunded</span>{{end}}{{if .Invalid}} <span class="muted small">({{.Invalid}} invalid)</span>{{end}}</td>
+        <td>{{.Samples}}</td>
+        <td>{{if .BestRun}}<a href="/admin/runs/{{.BestRun}}">{{pct .BestPassed .Total}}</a>{{else}}<span class="muted">–</span>{{end}}</td>
+        <td>{{if .BestRun}}{{.BestScore}}{{else}}<span class="muted">–</span>{{end}}</td>
         <td>{{ts .FirstFull}}</td>
-        <td>{{if .Sub}}<a href="/admin/runs/{{.Sub.RunID}}">{{pct .SubPassed .SubTotal}}</a> at {{ts .Sub.At}}{{if .Sub.Auto}} <span class="pill">auto</span>{{end}}{{else}}<span class="muted">–</span>{{end}}</td>
+        <td>{{.Nodes}}</td><td>{{.Integr}}</td>
+        <td><form method="post" action="/admin/offline" class="row tight">
+          <input type="hidden" name="n" value="{{$.Selected}}"><input type="hidden" name="team" value="{{.Team.ID}}">
+          <input class="num" type="text" name="score" value="{{if .HasOffline}}{{.Offline}}{{end}}" inputmode="decimal" aria-label="Offline score for {{.Team.Code}}">
+          <input class="note" type="text" name="note" value="{{.OfflineNote}}" placeholder="note" aria-label="Note for {{.Team.Code}}">
+          <button type="submit" class="secondary">Save</button></form></td>
         <td>{{ts .LastActivity}}</td>
       </tr>
-      {{else}}<tr><td colspan="8" class="muted">No teams yet. Create them with <code>judge teams</code>.</td></tr>
+      {{else}}<tr><td colspan="10" class="muted">No teams yet. Create them with <code>judge teams</code>.</td></tr>
       {{end}}
+      </tbody>
+    </table></div>
+  </section>
+
+  <section class="card" id="incidents">
+    <h2>Incidents{{if .OpenIncidents}} <span class="pill open">{{.OpenIncidents}} open</span>{{end}}</h2>
+    <p class="small muted">Things that broke on our side. The team saw a plain message and the attempt was refunded; check it by hand if needed.</p>
+    <div class="table-scroll"><table>
+      <thead><tr><th>Time</th><th>Team</th><th>Run</th><th>Test</th><th>Kind</th><th>What failed</th><th></th></tr></thead>
+      <tbody>
+      {{range .Incidents}}
+      <tr class="{{if .Resolved}}resolved{{end}}">
+        <td>{{ts .At}}</td><td>{{.TeamCode}}</td>
+        <td>{{if .RunID}}<a href="/admin/runs/{{.RunID}}">{{.RunID}}</a>{{end}}</td>
+        <td>{{.Test}}</td><td><span class="pill">{{.Kind}}</span></td>
+        <td><pre class="raw">{{.Detail}}</pre></td>
+        <td><form method="post" action="/admin/incident"><input type="hidden" name="id" value="{{.ID}}"><input type="hidden" name="n" value="{{$.Selected}}">
+          {{if .Resolved}}<button class="secondary" name="action" value="reopen">Reopen</button>{{else}}<button name="action" value="resolve">Mark resolved</button>{{end}}</form></td>
+      </tr>
+      {{else}}<tr><td colspan="7" class="muted">Nothing has broken so far.</td></tr>{{end}}
       </tbody>
     </table></div>
   </section>

@@ -135,7 +135,7 @@ func cmdCheck(args []string) error {
 		if err != nil {
 			return err
 		}
-		job := &runner.Job{RunID: int64(t), Workflow: raw, Trigger: an.Trigger, Needs: an.Needs, Creds: credMap, StepTimout: p.StepTimeoutSec, Parallel: p.Parallel}
+		job := p.NewJob(int64(t), raw, an, credMap)
 		for _, r := range rendered {
 			job.Tests = append(job.Tests, r.Job)
 		}

@@ -1,0 +1,41 @@
+id: 2-emergency
+title: Severity-Based Emergency Response
+trigger: webhook
+method: POST
+timezone: Asia/Kolkata
+step_timeout_sec: 60
+parallel: 3
+isolate: true
+entries:
+  - {name: report, path: emergency-report, method: POST}
+  - {name: status, path: emergency-status, method: POST}
+  - {name: escalate, path: emergency-escalate, method: POST}
+# Simulated accounts: teams enter nothing for these. Their own LLM key is the only credential.
+mocked: [googleSheetsOAuth2Api, gmailOAuth2, telegramApi]
+
+# Where alerts must go. Telegram or email each count as "alerted".
+directory:
+  ambulance:  {name: Ambulance Team,        chat: "5100000001", email: ambulance-team@alerts.example}
+  fire:       {name: Fire Brigade,          chat: "5100000002", email: fire-brigade@alerts.example}
+  traffic:    {name: Traffic Police,        chat: "5100000003", email: traffic-police@alerts.example}
+  disaster:   {name: Disaster Response Team, chat: "5100000004", email: disaster-response@alerts.example}
+  control:    {name: Control Room,          chat: "5100000005", email: control-room@alerts.example}
+  supervisor: {name: Supervisor,            chat: "5100000006", email: supervisor@alerts.example}
+  head:       {name: Department Head,       chat: "5100000007", email: dept-head@alerts.example}
+alert_rules:
+  Critical: ["$team", supervisor, head]
+  High: ["$team", supervisor]
+  Medium: ["$team"]
+  Low: []
+  Not an Emergency: []
+
+# Every test starts with this (empty) spreadsheet. A team that stores incidents in Google Sheets
+# finds a tab called Incidents whose first row has these columns.
+sheets:
+  "*":
+    title: Emergency incidents
+    sheets:
+      - title: Incidents
+        header: [incident_id, citizen_name, phone, description, location, category, severity,
+                 severity_reason, required_team, status, report_count, duplicate, created_at,
+                 last_updated, ack_deadline, acknowledged_at, escalation_status, escalated_at]

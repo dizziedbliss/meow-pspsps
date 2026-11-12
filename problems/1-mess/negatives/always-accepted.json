@@ -1,0 +1,96 @@
+{
+ "name": "NEGATIVE always accepted, never stores",
+ "nodes": [
+  {
+   "parameters": {
+    "httpMethod": "POST",
+    "path": "mess-feedback",
+    "responseMode": "responseNode",
+    "options": {}
+   },
+   "id": "Feedback Webhook",
+   "name": "Feedback Webhook",
+   "type": "n8n-nodes-base.webhook",
+   "typeVersion": 2.1,
+   "position": [
+    0,
+    0
+   ],
+   "webhookId": "mess-feedback"
+  },
+  {
+   "parameters": {
+    "respondWith": "json",
+    "responseBody": "={{ { status: 'accepted', message: 'ok' } }}",
+    "options": {}
+   },
+   "id": "Reply",
+   "name": "Reply",
+   "type": "n8n-nodes-base.respondToWebhook",
+   "typeVersion": 1.1,
+   "position": [
+    250,
+    0
+   ]
+  },
+  {
+   "parameters": {
+    "httpMethod": "POST",
+    "path": "mess-report",
+    "responseMode": "responseNode",
+    "options": {}
+   },
+   "id": "Report Webhook",
+   "name": "Report Webhook",
+   "type": "n8n-nodes-base.webhook",
+   "typeVersion": 2.1,
+   "position": [
+    0,
+    300
+   ],
+   "webhookId": "mess-report"
+  },
+  {
+   "parameters": {
+    "respondWith": "json",
+    "responseBody": "={{ { date: $json.body.date, total_responses: 0, overall_rating: null, meals: [{meal:'Breakfast',responses:0,average_rating:null},{meal:'Lunch',responses:0,average_rating:null},{meal:'Snacks',responses:0,average_rating:null},{meal:'Dinner',responses:0,average_rating:null}], meals_requiring_attention: [], top_complaints: [], hygiene_concerns: [] } }}",
+    "options": {}
+   },
+   "id": "Reply Report",
+   "name": "Reply Report",
+   "type": "n8n-nodes-base.respondToWebhook",
+   "typeVersion": 1.1,
+   "position": [
+    250,
+    300
+   ]
+  }
+ ],
+ "connections": {
+  "Feedback Webhook": {
+   "main": [
+    [
+     {
+      "node": "Reply",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Report Webhook": {
+   "main": [
+    [
+     {
+      "node": "Reply Report",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  }
+ },
+ "settings": {
+  "executionOrder": "v1"
+ }
+}

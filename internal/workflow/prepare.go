@@ -2,7 +2,6 @@ package workflow
 
 import (
 	"encoding/json"
-	"fmt"
 )
 
 // CredRef points a node at a credential created inside the judge's n8n.
@@ -22,12 +21,7 @@ func Prepare(raw []byte, trig Trigger, needs []CredNeed, refs map[string]CredRef
 	if err != nil {
 		return nil, err
 	}
-	byNode := map[string][]string{}
-	for _, n := range needs {
-		for _, node := range n.Nodes {
-			byNode[node] = append(byNode[node], n.Type)
-		}
-	}
+	byNode := credsByNode(needs)
 
 	nodes := make([]any, 0, len(w.Nodes))
 	for _, n := range w.Nodes {
@@ -51,19 +45,8 @@ func Prepare(raw []byte, trig Trigger, needs []CredNeed, refs map[string]CredRef
 				delete(n, "credentials")
 			}
 		}
-		if types := byNode[name]; len(types) > 0 {
-			creds, _ := n["credentials"].(map[string]any)
-			if creds == nil {
-				creds = map[string]any{}
-			}
-			for _, t := range types {
-				ref, ok := refs[t]
-				if !ok {
-					return nil, fmt.Errorf("internal: no credential created for %s", t)
-				}
-				creds[t] = map[string]any{"id": ref.ID, "name": ref.Name}
-			}
-			n["credentials"] = creds
+		if err := patchCreds(n, byNode[name], refs); err != nil {
+			return nil, err
 		}
 		nodes = append(nodes, n)
 	}

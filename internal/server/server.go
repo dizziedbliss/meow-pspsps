@@ -77,7 +77,7 @@ func New(cfg Config) (*Server, error) {
 	}
 	s := &Server{cfg: cfg, store: st, problems: probs, cat: cat, tmpl: tmpl, keys: newKeyStore(cfg.KeyTTL), queue: newQueue()}
 	// Keys live only in memory, so anything queued before a restart can't run any more.
-	if n, err := st.FailStale(now()+1, "the judge restarted before this run finished; please Run again"); err == nil && n > 0 {
+	if n, err := st.FailStale(now()+1, now()+1, plainJudgeFault, "restart"); err == nil && n > 0 {
 		log.Printf("marked %d unfinished runs as failed after restart", n)
 	}
 	return s, nil
@@ -99,16 +99,24 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/analyze", s.team(s.apiAnalyze))
 	mux.HandleFunc("POST /api/run", s.team(s.apiRun))
 	mux.HandleFunc("GET /api/runs/{id}", s.team(s.apiRunGet))
-	mux.HandleFunc("POST /api/submit", s.team(s.apiSubmit))
+	mux.HandleFunc("GET /api/starter", s.team(s.apiStarter))
+	mux.HandleFunc("GET /board", s.boardPage)
 
 	mux.HandleFunc("GET /admin/login", s.adminLoginPage)
 	mux.HandleFunc("POST /admin/login", s.adminLoginPost)
 	mux.HandleFunc("GET /admin", s.admin(s.adminPage))
 	mux.HandleFunc("POST /admin/round", s.admin(s.adminRound))
+	mux.HandleFunc("POST /admin/round-settings", s.admin(s.adminRoundSettings))
+	mux.HandleFunc("POST /admin/offline", s.admin(s.adminOffline))
+	mux.HandleFunc("POST /admin/incident", s.admin(s.adminIncident))
 	mux.HandleFunc("GET /admin/export.csv", s.admin(s.adminExport))
 	mux.HandleFunc("GET /admin/runs/{id}", s.admin(s.adminRun))
 	mux.HandleFunc("GET /admin/runs/{id}/workflow.json", s.admin(s.adminRunWorkflow))
 
+	// ping lets the worker installer check the URL and token without claiming a run.
+	mux.HandleFunc("GET /api/worker/ping", s.worker(func(w http.ResponseWriter, r *http.Request) {
+		jsonOut(w, map[string]string{"ok": "worker token accepted"})
+	}))
 	mux.HandleFunc("POST /api/worker/claim", s.worker(s.workerClaim))
 	mux.HandleFunc("POST /api/worker/result", s.worker(s.workerResult))
 	return securityHeaders(mux)
@@ -125,8 +133,10 @@ func (s *Server) Start(ctx context.Context) {
 				return
 			case <-t.C:
 				s.keys.sweep()
-				// A run a worker took but never reported within 12 minutes is lost.
-				if n, err := s.store.FailStale(now()-12*60, "the test machine running this didn't report back; please Run again"); err == nil && n > 0 {
+				s.store.SweepSessions()
+				// Queued runs wait at most as long as their keys live; a run a worker took (measured
+				// from when it started, not from when it was queued) is lost after 12 minutes.
+				if n, err := s.store.FailStale(now()-int64(s.cfg.KeyTTL.Seconds())-60, now()-12*60, plainJudgeFault, "worker-timeout"); err == nil && n > 0 {
 					log.Printf("failed %d stale runs", n)
 				}
 			}
@@ -146,7 +156,11 @@ func securityHeaders(h http.Handler) http.Handler {
 
 // --- sessions -------------------------------------------------------------------------------
 
-const cookieName = "judge_session"
+// Teams and organisers get different cookies, so logging out of one never logs out the other in the same browser.
+const (
+	cookieName      = "judge_session"
+	adminCookieName = "judge_admin"
+)
 
 func token() string {
 	b := make([]byte, 32)
@@ -154,8 +168,8 @@ func token() string {
 	return hex.EncodeToString(b)
 }
 
-func setSession(w http.ResponseWriter, r *http.Request, tok string) {
-	http.SetCookie(w, &http.Cookie{Name: cookieName, Value: tok, Path: "/", HttpOnly: true, SameSite: http.SameSiteLaxMode,
+func setSession(w http.ResponseWriter, r *http.Request, name, tok string) {
+	http.SetCookie(w, &http.Cookie{Name: name, Value: tok, Path: "/", HttpOnly: true, SameSite: http.SameSiteLaxMode,
 		Secure: r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https", MaxAge: 60 * 60 * 24})
 }
 
@@ -190,7 +204,7 @@ func (s *Server) team(h func(http.ResponseWriter, *http.Request, *Team)) http.Ha
 
 func (s *Server) admin(h http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		c, err := r.Cookie(cookieName)
+		c, err := r.Cookie(adminCookieName)
 		if err == nil {
 			if _, admin, ok := s.store.Session(c.Value); ok && admin {
 				h(w, r)
@@ -367,32 +381,65 @@ func (s *Server) workerClaim(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// plainJudgeFault is what a team sees when something broke on our side; the raw error goes to the
+// organisers as an incident.
+const plainJudgeFault = "Something failed on our side while testing your workflow. This attempt is refunded and the organisers have been told."
+
+// failRun ends a run as a judge-side failure: refunded, with the raw error kept for organisers.
+func (s *Server) failRun(run *Run, kind, test, raw string) {
+	ok, err := s.store.FinishRun(run.ID, StatusFailed, "", plainJudgeFault, 0, 0, "")
+	if err != nil {
+		log.Printf("run %d: finish: %v", run.ID, err)
+	}
+	if ok {
+		_ = s.store.AddIncident(run.TeamID, run.ID, test, kind, raw)
+	}
+}
+
+// renderFor renders a run's tests; a sample run only gets the visible ones.
+func (s *Server) renderFor(run *Run) ([]*problem.Rendered, error) {
+	rendered, err := s.problems[run.ProblemID].RenderAt(run.Seed, run.ID, time.Unix(run.RefTime, 0))
+	if err != nil || run.Kind != KindSample {
+		return rendered, err
+	}
+	var vis []*problem.Rendered
+	for _, rt := range rendered {
+		if rt.Def.Visible {
+			vis = append(vis, rt)
+		}
+	}
+	return vis, nil
+}
+
 func (s *Server) buildJob(id int64, worker string) (*runner.Job, error) {
 	run, err := s.store.GetRun(id)
 	if err != nil || run == nil {
 		return nil, fmt.Errorf("load: %v", err)
 	}
+	if run.Status != StatusQueued {
+		return nil, nil // failed as stale while it waited
+	}
 	creds, ok := s.keys.take(id)
 	if !ok {
-		_ = s.store.FinishRun(id, StatusFailed, "", "your keys expired before a test machine was free; please Run again", 0, 0, "")
+		s.failRun(run, "keys-expired", "", "keys expired before a test machine was free (queue too long or server restarted)")
 		return nil, nil
 	}
 	p := s.problems[run.ProblemID]
-	rendered, err := p.Render(run.Seed, run.ID)
+	rendered, err := s.renderFor(run)
 	if err != nil {
-		_ = s.store.FinishRun(id, StatusFailed, "", "internal error rendering tests", 0, 0, "")
+		s.failRun(run, "render", "", "rendering tests: "+err.Error())
 		return nil, err
 	}
 	an, err := s.analyzeRaw([]byte(run.Workflow), p)
 	if err != nil || len(an.Errors) > 0 {
-		_ = s.store.FinishRun(id, StatusFailed, "", "internal error re-reading the workflow", 0, 0, "")
+		s.failRun(run, "reanalyze", "", fmt.Sprintf("re-reading the stored workflow: %v %v", err, an.Errors))
 		return nil, fmt.Errorf("re-analyze: %v %v", err, an.Errors)
 	}
-	job := &runner.Job{RunID: id, Workflow: json.RawMessage(run.Workflow), Trigger: an.Trigger, Needs: an.Needs, Creds: creds, StepTimout: p.StepTimeoutSec, Parallel: p.Parallel}
+	job := p.NewJob(id, json.RawMessage(run.Workflow), an, creds)
 	for _, rt := range rendered {
 		job.Tests = append(job.Tests, rt.Job)
 	}
-	if err := s.store.MarkRunning(id, worker); err != nil {
+	if ok, err := s.store.MarkRunning(id, worker); err != nil || !ok {
 		return nil, err
 	}
 	return job, nil
@@ -409,7 +456,10 @@ func (s *Server) workerResult(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusConflict, "run not running")
 		return
 	}
-	_ = s.store.SetStatus(run.ID, StatusGrading)
+	if ok, _ := s.store.SetStatus(run.ID, StatusRunning, StatusGrading); !ok {
+		jsonErr(w, http.StatusConflict, "run not running")
+		return
+	}
 	w.WriteHeader(http.StatusAccepted)
 	go s.gradeRun(run, &res) // rubric grading can take a few seconds; the worker needn't wait
 }
@@ -418,11 +468,14 @@ func (s *Server) gradeRun(run *Run, res *runner.Result) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	if res.Infra != "" {
-		_ = s.store.FinishRun(run.ID, StatusFailed, "", res.Infra, 0, 0, "")
+		s.failRun(run, "infra", "", res.Infra)
 		return
 	}
-	p := s.problems[run.ProblemID]
-	rendered, _ := p.Render(run.Seed, run.ID)
+	rendered, err := s.renderFor(run)
+	if err != nil {
+		s.failRun(run, "render", "", "rendering tests for grading: "+err.Error())
+		return
+	}
 	verdicts := make([]grade.TestVerdict, len(rendered))
 	var passed, total float64
 	if res.Invalid != "" {
@@ -446,8 +499,12 @@ func (s *Server) gradeRun(run *Run, res *runner.Result) {
 		wg.Wait()
 		for _, v := range verdicts {
 			if v.Verdict == grade.JudgeError || v.Verdict == grade.NotRun {
-				log.Printf("run %d: grading incomplete: %s", run.ID, v.Error)
-				_ = s.store.FinishRun(run.ID, StatusFailed, "", "the judge could not complete grading; please try again or contact an organiser", 0, 0, "")
+				log.Printf("run %d: grading incomplete", run.ID)
+				kind := "grader"
+				if v.Verdict == grade.NotRun {
+					kind = "test-not-run"
+				}
+				s.failRun(run, kind, v.ID, v.Error)
 				return
 			}
 		}
@@ -459,6 +516,19 @@ func (s *Server) gradeRun(run *Run, res *runner.Result) {
 		}
 	}
 	b, _ := json.Marshal(verdicts)
-	_ = s.store.FinishRun(run.ID, StatusDone, res.Invalid, "", passed, total, string(b))
-	log.Printf("run %d team %d: %.0f/%.0f in %.1fs on %s", run.ID, run.TeamID, passed, total, res.Seconds, res.Worker)
+	ok, err := s.store.FinishRun(run.ID, StatusDone, res.Invalid, "", passed, total, string(b))
+	if err != nil || !ok {
+		log.Printf("run %d: result dropped (finished=%v err=%v): it was already closed", run.ID, ok, err)
+		return
+	}
+	// A test still rate-limited after the retries is not the team's fault: refund the attempt but
+	// keep the verdicts visible.
+	for _, v := range verdicts {
+		if v.Verdict == grade.RateLimited {
+			_ = s.store.Refund(run.ID)
+			_ = s.store.AddIncident(run.TeamID, run.ID, v.ID, "rate-limited", "test still Key Rate-Limited after retries; attempt refunded")
+			break
+		}
+	}
+	log.Printf("run %d team %d (%s): %.0f/%.0f in %.1fs on %s", run.ID, run.TeamID, run.Kind, passed, total, res.Seconds, res.Worker)
 }
