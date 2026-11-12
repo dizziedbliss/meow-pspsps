@@ -5,7 +5,7 @@ Updated 12 November 2026, after the event database reset and live smoke test. Th
 ## Current event state
 
 - The central site is running with two local worker slots and a Cloudflare quick tunnel. The current public address is in the running tunnel log and may change when the tunnel restarts.
-- `event.db` was reset after a backup. It has 86 participant accounts plus the private `PPOOL` practice account. The only run created after reset was a PPOOL sample used for the live check. Each real team retains three scored attempts per round. Round 1 is pending until an organiser opens it.
+- `event.db` was reset after a backup. It has 86 participant accounts plus the private `PPOOL` practice account. Only PPOOL practice runs were created after reset; participant teams retain their full attempt allowance. Each real team retains three scored attempts per round. Round 1 is pending until an organiser opens it.
 - The current `teams.csv` is the fresh participant login list. It is private, mode 600, and must not be committed or shared wholesale. Old test data and old logins were moved to `logs/event-backup-before-reset-20261112-063442/`.
 - `PPOOL` can preview the next pending round and run unlimited sequential samples and attempts. It is excluded from the public leaderboard and scoreboard CSV. Keep its password private.
 - Event-day procedures, worker installation and troubleshooting are in `HANDBOOK.md`. The participant guide is linked from the site. Printable statements and an organiser-only manual of all 37 test cases are under `handoff/event-materials/`.
