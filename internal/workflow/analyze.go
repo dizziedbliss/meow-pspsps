@@ -116,6 +116,9 @@ func Analyze(w *Workflow, raw []byte, cat *catalog.Catalog, exp Expect) Analysis
 		if len(exp.Entries) > 0 && isTriggerType(typ) && !entryNode[name] {
 			continue // switched off during tests; its credentials and version don't matter
 		}
+		if typ == "n8n-nodes-base.code" && strings.HasPrefix(strings.ToLower(str(params(n), "language")), "python") {
+			a.Warnings = append(a.Warnings, fmt.Sprintf("Code node %q uses Python; Python execution is not configured on the judge and may fail. Use JavaScript or check with an organiser.", name))
+		}
 		v := typeVersion(n)
 		known, vOK := cat.HasVersion(typ, v)
 		switch {

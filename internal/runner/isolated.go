@@ -170,11 +170,11 @@ func runIsolatedTest(ctx context.Context, cl *n8nClient, env *Env, job *Job, t *
 		sr := doStep(ctx, u, post, nonce, si, st, timeout)
 		if !sr.TimedOut && sr.ConnErr == "" {
 			// The workflow may keep going after it answers (alerts, sheet writes): wait for the end.
-			deadline := time.Now().Add(timeout)
-			for time.Now().Before(deadline) && countFinished(ctx, cl, wfID) <= before {
-				time.Sleep(300 * time.Millisecond)
+			if !waitExecutionFinished(ctx, timeout, func() bool { return countFinished(ctx, cl, wfID) > before }) {
+				sr.TimedOut = true
+			} else {
+				time.Sleep(150 * time.Millisecond)
 			}
-			time.Sleep(150 * time.Millisecond)
 		}
 		_ = latestExecError(ctx, cl, wfID, &sr)
 		useLastNodeIfAcknowledged(ctx, cl, wfID, &sr) // webhook set to respond immediately: the last node's output is the answer
@@ -267,4 +267,24 @@ func withTeamHeaders(seed *mock.Seed, headers map[string][]string) *mock.Seed {
 	tpl.Sheets = tabs
 	cp.Sheets["*"] = tpl
 	return &cp
+}
+
+// waitExecutionFinished prevents an early webhook response from being graded before its workflow finishes.
+func waitExecutionFinished(ctx context.Context, timeout time.Duration, finished func() bool) bool {
+	deadline := time.NewTimer(timeout)
+	defer deadline.Stop()
+	tick := time.NewTicker(300 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		if finished() {
+			return true
+		}
+		select {
+		case <-ctx.Done():
+			return false
+		case <-deadline.C:
+			return false
+		case <-tick.C:
+		}
+	}
 }

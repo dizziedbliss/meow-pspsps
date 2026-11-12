@@ -92,7 +92,8 @@ WantedBy=multi-user.target
 EOF
   fi
   run "systemctl daemon-reload"
-  run "systemctl enable --now veryjudgycat-worker" || { echo "could not start the service"; exit 1; }
+  run "systemctl enable veryjudgycat-worker" || { echo "could not enable the service"; exit 1; }
+  run "systemctl restart veryjudgycat-worker" || { echo "could not start the service"; exit 1; }
   if [ "$DRY" != 1 ]; then
     sleep 8
     if systemctl is-active --quiet veryjudgycat-worker; then echo "worker is running"; else echo "worker did not stay up:"; journalctl -u veryjudgycat-worker -n 15 --no-pager; exit 1; fi
@@ -125,7 +126,6 @@ do_uninstall() {
     quiet "docker rm -f meow-judge-mock"
     quiet "docker network rm meow-judge-net"
     quiet "docker rmi -f meow-judge-n8n:2.47.4 meow-judge-mock:2.47.4"
-    quiet "docker image prune -f"
   fi
   MARK=0; [ -f "$APP/.docker-installed-by-us" ] && MARK=1
   run "rm -rf $APP"   # binary, token file, marker

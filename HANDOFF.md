@@ -1,5 +1,7 @@
 # HANDOFF: VeryJudgyCat for Automathon 2.0
 
+**Update:** This is the earlier Claude handoff. The current event state and follow-up test results are in `EVENT-READINESS.md`; use `HANDBOOK.md` for event-day steps.
+
 Written 2026-11-12 about 05:55 IST by Claude, for whoever continues (Codex or a new Claude session).
 Read this file top to bottom once. The project rules are in `CLAUDE.md`; the commands are in `README.md`.
 

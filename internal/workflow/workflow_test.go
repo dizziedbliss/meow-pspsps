@@ -104,3 +104,18 @@ func TestScanSecrets(t *testing.T) {
 		t.Fatal("false positive")
 	}
 }
+
+func TestAnalyzeWarnsAboutPythonCode(t *testing.T) {
+	raw, w, cat := load(t)
+	node := map[string]any{"name": "Python step", "type": "n8n-nodes-base.code", "typeVersion": 2.0, "parameters": map[string]any{"language": "python"}}
+	w.Nodes = append(w.Nodes, node)
+	a := Analyze(w, raw, cat, Expect{Trigger: TriggerWebhook, Method: "POST"})
+	if !strings.Contains(strings.Join(a.Warnings, "\n"), "Python step") {
+		t.Fatalf("missing Python warning: %v", a.Warnings)
+	}
+	node["disabled"] = true
+	a = Analyze(w, raw, cat, Expect{Trigger: TriggerWebhook, Method: "POST"})
+	if strings.Contains(strings.Join(a.Warnings, "\n"), "Python step") {
+		t.Fatal("warned for disabled node")
+	}
+}

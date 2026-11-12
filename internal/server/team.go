@@ -103,9 +103,10 @@ type stateResp struct {
 }
 
 type attemptsView struct {
-	Used int `json:"used"`
-	Max  int `json:"max"`
-	Left int `json:"left"`
+	Used      int  `json:"used"`
+	Max       int  `json:"max"`
+	Left      int  `json:"left"`
+	Unlimited bool `json:"unlimited,omitempty"`
 }
 
 // bestView is the attempt that currently counts for the team.
@@ -152,7 +153,7 @@ type runSummary struct {
 
 func (s *Server) apiState(w http.ResponseWriter, r *http.Request, t *Team) {
 	resp := stateResp{Team: t.Name, Runs: []runSummary{}, N8n: s.cat.N8nVersion, Workers: s.liveWorkers(), Attempts: attemptsView{Max: MaxAttempts}}
-	rd, err := s.store.OpenRound()
+	rd, err := s.roundFor(t)
 	if err != nil {
 		jsonErr(w, 500, "db error")
 		return
@@ -190,7 +191,8 @@ func (s *Server) apiState(w http.ResponseWriter, r *http.Request, t *Team) {
 		}
 	}
 	resp.Attempts.Left = MaxAttempts - resp.Attempts.Used
-	if last := s.store.LastSample(t.ID, rd.N); last > 0 {
+	resp.Attempts.Unlimited = t.Code == practiceTeamCode
+	if last := s.store.LastSample(t.ID, rd.N); last > 0 && !resp.Attempts.Unlimited {
 		if w := last + SampleThrottle - now(); w > 0 {
 			resp.SampleWait = w
 		}
@@ -210,8 +212,26 @@ func (s *Server) liveWorkers() int {
 	return n
 }
 
-func (s *Server) currentProblem() (*Round, *problem.Problem, error) {
+// roundFor lets the organiser's private practice account preview the first pending round.
+func (s *Server) roundFor(t *Team) (*Round, error) {
 	rd, err := s.store.OpenRound()
+	if err != nil || rd != nil || t.Code != practiceTeamCode {
+		return rd, err
+	}
+	rounds, err := s.store.Rounds()
+	if err != nil {
+		return nil, err
+	}
+	for i := range rounds {
+		if rounds[i].Status == "pending" {
+			return &rounds[i], nil
+		}
+	}
+	return nil, nil
+}
+
+func (s *Server) currentProblem(t *Team) (*Round, *problem.Problem, error) {
+	rd, err := s.roundFor(t)
 	if err != nil || rd == nil {
 		return nil, nil, err
 	}
@@ -238,7 +258,7 @@ func (s *Server) apiAnalyze(w http.ResponseWriter, r *http.Request, t *Team) {
 		jsonErr(w, 400, "that file isn't valid JSON (or is over 5 MB)")
 		return
 	}
-	_, p, _ := s.currentProblem()
+	_, p, _ := s.currentProblem(t)
 	if p == nil {
 		jsonErr(w, 409, "no round is open right now")
 		return
@@ -263,7 +283,7 @@ func (s *Server) apiRun(w http.ResponseWriter, r *http.Request, t *Team) {
 		jsonErr(w, 400, "that file isn't valid JSON (or is over 5 MB)")
 		return
 	}
-	rd, p, _ := s.currentProblem()
+	rd, p, _ := s.currentProblem(t)
 	if p == nil {
 		jsonErr(w, 409, "no round is open right now")
 		return
@@ -472,7 +492,7 @@ func featuresJSON(an workflow.Analysis) sql.NullString {
 
 // apiStarter serves the open round's starter workflow (the required webhooks, ready to paste).
 func (s *Server) apiStarter(w http.ResponseWriter, r *http.Request, t *Team) {
-	_, p, err := s.currentProblem()
+	_, p, err := s.currentProblem(t)
 	if err != nil || p == nil {
 		jsonErr(w, 404, "no round is open")
 		return

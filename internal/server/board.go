@@ -55,6 +55,14 @@ func (s *Server) leaderboard(onlyShown bool) ([]Round, []boardRow, error) {
 	if err != nil {
 		return nil, nil, err
 	}
+	// The private practice account must never appear on the public board or CSV.
+	eligibleTeams := teams[:0]
+	for _, team := range teams {
+		if team.Code != practiceTeamCode {
+			eligibleTeams = append(eligibleTeams, team)
+		}
+	}
+	teams = eligibleTeams
 	byTeam := map[int64]*boardRow{}
 	rows := make([]boardRow, len(teams))
 	for i, t := range teams {

@@ -55,7 +55,7 @@ They show up under "Test machines" on `/admin`. Workers only make outbound HTTPS
 ### If something breaks
 
 - Central restarts: runs that were queued or running are marked failed ("please Run again"), because
-  keys live only in memory. Submissions and scores are safe in `judge.db`.
+  keys live only in memory. Submissions and scores are safe in `event.db`.
 - A worker dies: its runs fail after 12 minutes. Restart it; it cleans up its old containers.
 - Check a workflow by hand: `bin/judge check --problem problems/<p> --workflow file.json -v`.
 
@@ -76,11 +76,11 @@ On the organiser machine, after the final build and bake: `./deploy/make-bundle.
 the Linux binary, the saved judge images, install and uninstall scripts). Copy that folder to each PC (USB, shared drive or
 `python3 -m http.server`), boot Linux, and run:
 
-    sudo ./install.sh --central https://<site> --token <worker token> --pool 2     # --dry-run shows the steps first
+    sudo ./veryjudgycat.sh install --central https://<site> --pool 2     # --dry-run shows the steps first
 
 It installs Docker from the distro repos if missing (Debian/Ubuntu; elsewhere install Docker and add `--skip-docker`), loads the images,
 and starts a `veryjudgycat-worker` service. The token sits in a root-only file. Pool 2 suits a 6 GB PC. After the event:
 
-    sudo ./uninstall.sh      # stops the service, removes containers, images, /opt/veryjudgycat, and Docker if we installed it (`--keep-docker` to keep it)
+    sudo ./veryjudgycat.sh uninstall      # stops the service, removes containers, images, /opt/veryjudgycat, and Docker if we installed it (`--keep-docker` to keep it)
 
-Then delete the copied folder. Not yet tried on a real lab PC: test `install.sh` and `uninstall.sh` on one PC before the event.
+Then delete the copied folder. Test the worker installer and connectivity on one college PC before installing on the others.

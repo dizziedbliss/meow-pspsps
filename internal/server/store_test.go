@@ -233,3 +233,23 @@ func TestSweepSessions(t *testing.T) {
 		t.Fatalf("%d sessions left, want 1", n)
 	}
 }
+
+func TestRunListsPreserveRunDetailsWithoutWorkflow(t *testing.T) {
+	s := testStore(t)
+	run := newRun(1, KindAttempt, StatusQueued)
+	run.Workflow = `{"nodes":[{"name":"example"}]}`
+	id, err := s.Admit(run)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, list := range []func() ([]*Run, error){func() ([]*Run, error) { return s.RunsFor(1, 1) }, func() ([]*Run, error) { return s.AllRunsInRound(1) }} {
+		rows, err := list()
+		if err != nil || len(rows) != 1 || rows[0].ID != id || rows[0].Workflow != "" {
+			t.Fatalf("bad list: %+v, %v", rows, err)
+		}
+	}
+	got, err := s.GetRun(id)
+	if err != nil || got.Workflow != run.Workflow {
+		t.Fatalf("workflow not preserved: %+v, %v", got, err)
+	}
+}

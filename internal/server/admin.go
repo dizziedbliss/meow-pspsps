@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"github.com/dizziedbliss/meow-pspsps/internal/workflow"
 	"log"
+	"math"
 	"net/http"
 	"sort"
 	"strconv"
@@ -165,7 +166,7 @@ func (s *Server) adminRound(w http.ResponseWriter, r *http.Request) {
 	action := r.FormValue("action")
 	msg := ""
 	switch action {
-	case "open":
+	case "open", "reopen":
 		if open, _ := s.store.OpenRound(); open != nil && open.N != n {
 			msg = s.closeRound(open.N) + " "
 		}
@@ -173,15 +174,13 @@ func (s *Server) adminRound(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "db error", 500)
 			return
 		}
-		msg += fmt.Sprintf("Round %d is open.", n)
+		if action == "reopen" {
+			msg += fmt.Sprintf("Round %d reopened.", n)
+		} else {
+			msg += fmt.Sprintf("Round %d is open.", n)
+		}
 	case "close":
 		msg = s.closeRound(n)
-	case "reopen":
-		if err := s.store.SetRoundStatus(n, "open"); err != nil {
-			http.Error(w, "db error", 500)
-			return
-		}
-		msg = fmt.Sprintf("Round %d reopened.", n)
 	}
 	log.Printf("admin: %s", msg)
 	http.Redirect(w, r, "/admin?round="+strconv.Itoa(n)+"&msg="+urlQuery(msg), http.StatusSeeOther)
@@ -198,7 +197,7 @@ func (s *Server) adminRoundSettings(w http.ResponseWriter, r *http.Request) {
 	mpt, err1 := strconv.ParseFloat(strings.TrimSpace(r.FormValue("marks_per_test")), 64)
 	max, err2 := strconv.ParseFloat(strings.TrimSpace(r.FormValue("max_marks")), 64)
 	msg := "Saved."
-	if err1 != nil || err2 != nil || mpt < 0 || max < 0 {
+	if err1 != nil || err2 != nil || math.IsNaN(mpt) || math.IsInf(mpt, 0) || math.IsNaN(max) || math.IsInf(max, 0) || mpt < 0 || max < 0 {
 		msg = "Marks must be numbers (0 or more)."
 	} else if err := s.store.SetRoundSettings(n, mpt, max, r.FormValue("show_on_board") != ""); err != nil {
 		http.Error(w, "db error", 500)
@@ -214,7 +213,7 @@ func (s *Server) adminOffline(w http.ResponseWriter, r *http.Request) {
 	if v := strings.TrimSpace(r.FormValue("score")); v == "" {
 		_ = s.store.ClearOffline(tid, n)
 		msg = "Offline score cleared."
-	} else if sc, err := strconv.ParseFloat(v, 64); err != nil || sc < 0 {
+	} else if sc, err := strconv.ParseFloat(v, 64); err != nil || math.IsNaN(sc) || math.IsInf(sc, 0) || sc < 0 {
 		msg = "The offline score must be a number (0 or more)."
 	} else if err := s.store.SetOffline(tid, n, sc, strings.TrimSpace(r.FormValue("note"))); err != nil {
 		http.Error(w, "db error", 500)

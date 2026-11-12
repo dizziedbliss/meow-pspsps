@@ -183,9 +183,10 @@
     const wait = state ? Math.max(0, (state.sampleWaitUntil || 0) - Date.now()) : 0;
     $("sampleBtn").disabled = busy || !ready || wait > 0;
     $("sampleBtn").textContent = wait > 0 ? `Samples again in ${Math.ceil(wait / 1000)} s` : "Run samples (free)";
-    $("attemptBtn").disabled = busy || !ready || left <= 0;
-    $("attemptBtn").textContent = busy ? "Running…" : left > 0 ? `Run attempt (${left} of ${state.attempts.max} left)` : "No attempts left";
-    $("attemptInfo").textContent = state && state.attempts ? `Attempts used: ${state.attempts.used} of ${state.attempts.max}. Only attempts are scored.` : "";
+    const unlimited = !!(state && state.attempts && state.attempts.unlimited);
+    $("attemptBtn").disabled = busy || !ready || (!unlimited && left <= 0);
+    $("attemptBtn").textContent = busy ? "Running…" : unlimited ? "Run practice attempt" : left > 0 ? `Run attempt (${left} of ${state.attempts.max} left)` : "No attempts left";
+    $("attemptInfo").textContent = unlimited ? "Practice account: unlimited runs; excluded from the leaderboard." : state && state.attempts ? `Attempts used: ${state.attempts.used} of ${state.attempts.max}. Only attempts are scored.` : "";
     $("runHint").textContent = !analysis && !busy ? "Upload a workflow first." : "";
     clearTimeout(sampleTimer);
     if (wait > 0) sampleTimer = setTimeout(updateButtons, 1000);
@@ -317,7 +318,7 @@
     try {
       const { runId } = await api("/api/run", { workflow, creds, kind });
       state.inFlight = runId;
-      if (kind === "sample") state.sampleWaitUntil = Date.now() + 120000;
+      if (kind === "sample" && !state.attempts.unlimited) state.sampleWaitUntil = Date.now() + 120000;
       updateButtons();
       watchRun(runId);
     } catch (e) {
@@ -476,7 +477,7 @@
   // ---------- scored attempt confirmation ----------
   function askAttempt() {
     const left = state.attempts.left;
-    $("confirmText").textContent = `This uses one of your ${left} remaining attempt${left > 1 ? "s" : ""} for this round and runs every test, hidden ones included. Your best finished attempt counts. Use "Run samples" to check your workflow first.`;
+    $("confirmText").textContent = state.attempts.unlimited ? "This practice run checks every test and does not appear on the leaderboard." : `This uses one of your ${left} remaining attempt${left > 1 ? "s" : ""} for this round and runs every test, hidden ones included. Your best finished attempt counts. Use "Run samples" to check your workflow first.`;
     $("confirm").showModal();
   }
 

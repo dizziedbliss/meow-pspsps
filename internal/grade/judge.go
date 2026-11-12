@@ -150,13 +150,16 @@ func (j *OpenAIJudge) grade(ctx context.Context, rubric, input, answer string) (
 		content := strings.TrimSpace(out.Choices[0].Message.Content)
 		content = strings.TrimPrefix(strings.TrimSuffix(strings.TrimPrefix(content, "```json"), "```"), "```")
 		var verdict struct {
-			Pass   bool   `json:"pass"`
+			Pass   *bool  `json:"pass"`
 			Reason string `json:"reason"`
 		}
 		if err := json.Unmarshal([]byte(strings.TrimSpace(content)), &verdict); err != nil {
 			return false, "", fmt.Errorf("judge LLM didn't return JSON")
 		}
-		return verdict.Pass, verdict.Reason, nil
+		if verdict.Pass == nil {
+			return false, "", fmt.Errorf("judge LLM response is missing a pass decision")
+		}
+		return *verdict.Pass, verdict.Reason, nil
 	}
 	return false, "", lastErr
 }

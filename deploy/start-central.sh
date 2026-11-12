@@ -20,6 +20,11 @@ while [ $# -gt 0 ]; do
   esac
 done
 run() { if [ "$DRY" = 1 ]; then echo "[dry-run] $*"; else "$@"; fi; }
+# Avoid starting a second process and mistaking the existing server's health check for ours.
+if [ "$DRY" != 1 ] && curl --noproxy '*' -fsS --max-time 2 "http://$ADDR/healthz" >/dev/null 2>&1; then
+  echo "a site is already responding at http://$ADDR; leave it running or stop it before restarting"
+  exit 1
+fi
 mkdir -p "$CFG"; chmod 700 "$CFG"
 for f in admin.pw worker.token; do
   [ -s "$CFG/$f" ] || { ( umask 077; head -c 24 /dev/urandom | base64 | tr -d '/+=\n' > "$CFG/$f" ); echo "generated $CFG/$f"; }
@@ -39,8 +44,8 @@ if [ "$DRY" = 1 ]; then echo "[dry-run] bin/judge serve --db $DB --rounds $ROUND
   mkdir -p logs
   nohup bin/judge serve --db "$DB" --rounds "$ROUNDS" --addr "$ADDR" --local-pool "$POOL" > logs/central.log 2>&1 &
   echo $! > logs/central.pid
-  for _ in $(seq 1 30); do curl -sf "http://$ADDR/healthz" >/dev/null 2>&1 && break; sleep 1; done
-  curl -sf "http://$ADDR/healthz" >/dev/null || { echo "the site did not start; see logs/central.log"; exit 1; }
+  for _ in $(seq 1 30); do curl --noproxy '*' -sf "http://$ADDR/healthz" >/dev/null 2>&1 && break; sleep 1; done
+  curl --noproxy '*' -sf "http://$ADDR/healthz" >/dev/null || { echo "the site did not start; see logs/central.log"; exit 1; }
   echo "site is up on http://$ADDR (log: logs/central.log, stop: kill \$(cat logs/central.pid))"
 fi
 SITE="http://$ADDR"

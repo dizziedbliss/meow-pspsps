@@ -22,6 +22,7 @@
     <label for="password">Password</label>
     <input id="password" name="password" type="password" placeholder="••••••••••" autocomplete="current-password" required {{if .Admin}}autofocus{{end}}>
     <div class="actions"><button class="btn" type="submit">log in</button></div>
+    {{if not .Admin}}<p class="small muted"><a href="/static/participant-guide.pdf" target="_blank" rel="noopener">Participant guide (PDF)</a></p>{{end}}
   </form>
 </main>
 </body>

@@ -311,6 +311,9 @@ type Run struct {
 
 const runCols = `id, team_id, round, problem_id, seed, status, kind, created, COALESCE(ref_time, created), started, finished, worker, wf_name, workflow, invalid, infra, passed, total, score, eligible, verdicts, features`
 
+// Lists omit workflows and detailed verdicts, which can each be megabytes per run.
+const runListCols = `id, team_id, round, problem_id, seed, status, kind, created, COALESCE(ref_time, created), started, finished, worker, wf_name, '' AS workflow, invalid, infra, passed, total, score, eligible, NULL AS verdicts, features`
+
 func scanRun(sc interface{ Scan(...any) error }) (*Run, error) {
 	r := &Run{}
 	err := sc.Scan(&r.ID, &r.TeamID, &r.Round, &r.ProblemID, &r.Seed, &r.Status, &r.Kind, &r.Created, &r.RefTime, &r.Started, &r.Finished, &r.Worker, &r.WfName, &r.Workflow, &r.Invalid, &r.Infra, &r.Passed, &r.Total, &r.Score, &r.Eligible, &r.Verdicts, &r.Features)
@@ -321,6 +324,8 @@ func scanRun(sc interface{ Scan(...any) error }) (*Run, error) {
 func (r *Run) Counted() bool { return r.Kind == KindAttempt && r.Eligible }
 
 // Admission limits.
+const practiceTeamCode = "PPOOL"
+
 const (
 	MaxAttempts    = 3
 	SampleThrottle = 2 * 60 // seconds between a team's sample runs
@@ -343,8 +348,13 @@ func (s *Store) Admit(r *Run) (int64, error) {
 		return 0, err
 	}
 	defer tx.Rollback()
+	var code string
+	if err := tx.QueryRow(`SELECT code FROM teams WHERE id = ?`, r.TeamID).Scan(&code); err != nil {
+		return 0, err
+	}
+	practice := code == practiceTeamCode
 	var status string
-	if err := tx.QueryRow(`SELECT status FROM rounds WHERE n = ?`, r.Round).Scan(&status); err != nil || status != "open" {
+	if err := tx.QueryRow(`SELECT status FROM rounds WHERE n = ?`, r.Round).Scan(&status); err != nil || (status != "open" && !(practice && status == "pending")) {
 		return 0, &AdmitError{409, "that round isn't open right now"}
 	}
 	var n int
@@ -359,7 +369,7 @@ func (s *Store) Admit(r *Run) (int64, error) {
 		if err := tx.QueryRow(`SELECT COUNT(*) FROM runs WHERE team_id = ? AND round = ? AND kind = 'attempt' AND eligible = 1`, r.TeamID, r.Round).Scan(&n); err != nil {
 			return 0, err
 		}
-		if n >= MaxAttempts {
+		if !practice && n >= MaxAttempts {
 			return 0, &AdmitError{409, fmt.Sprintf("you've used all %d attempts for this round", MaxAttempts)}
 		}
 	case KindSample:
@@ -367,7 +377,7 @@ func (s *Store) Admit(r *Run) (int64, error) {
 		if err := tx.QueryRow(`SELECT MAX(created) FROM runs WHERE team_id = ? AND round = ? AND kind = 'sample'`, r.TeamID, r.Round).Scan(&last); err != nil {
 			return 0, err
 		}
-		if wait := last.Int64 + SampleThrottle - now(); last.Valid && wait > 0 {
+		if wait := last.Int64 + SampleThrottle - now(); !practice && last.Valid && wait > 0 {
 			return 0, &AdmitError{429, fmt.Sprintf("sample runs are limited to one every 2 minutes; try again in %d s", wait)}
 		}
 	default:
@@ -437,11 +447,11 @@ func (s *Store) queryRuns(q string, args ...any) ([]*Run, error) {
 
 // RunsFor lists a team's runs in a round, newest first, without the workflow body.
 func (s *Store) RunsFor(teamID int64, round int) ([]*Run, error) {
-	return s.queryRuns(`SELECT `+runCols+` FROM runs WHERE team_id = ? AND round = ? ORDER BY id DESC`, teamID, round)
+	return s.queryRuns(`SELECT `+runListCols+` FROM runs WHERE team_id = ? AND round = ? ORDER BY id DESC`, teamID, round)
 }
 
 func (s *Store) AllRunsInRound(round int) ([]*Run, error) {
-	return s.queryRuns(`SELECT `+runCols+` FROM runs WHERE round = ? ORDER BY id`, round)
+	return s.queryRuns(`SELECT `+runListCols+` FROM runs WHERE round = ? ORDER BY id`, round)
 }
 
 // MarkRunning moves a queued run to running; false if it is no longer queued.
