@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Run {{.Run.ID}} · VeryJudgyCat</title>
+<link rel="stylesheet" href="/static/style.css">
+<script src="/static/theme.js"></script>
+</head>
+<body class="admin">
+<header class="top"><div class="wrap">
+  <a class="brand" href="/admin?round={{.Run.Round}}">← VeryJudgyCat <span>organisers</span></a>
+  {{if .OpenIncidents}}<a class="pill open" href="/admin#incidents">{{.OpenIncidents}} open incident{{if gt .OpenIncidents 1}}s{{end}}</a>{{end}}
+</div></header>
+<main class="wrap">
+  <h1>{{.Team.Code}} · run {{.Run.ID}}</h1>
+  <p class="muted">{{.Team.Name}} · round {{.Run.Round}} · {{.Run.Kind}}{{if not .Run.Eligible}} (refunded){{end}} · {{.Run.Status}} · started {{ts .Run.Created}} · <b>{{pct .View.Passed .View.Total}}</b>{{if .Run.Score.Valid}} · score {{.Run.Score.Float64}}{{end}}
+   · <a href="/admin/runs/{{.Run.ID}}/workflow.json">download workflow JSON</a></p>
+  {{if .View.Invalid}}<pre class="notice bad">{{.View.Invalid}}</pre>{{end}}
+  {{if .View.Infra}}<p class="notice warn">{{.View.Infra}}</p>{{end}}
+  {{if .Run.Infra.Valid}}<p class="notice warn">Team-facing message: {{.Run.Infra.String}} (raw errors are in the incident list)</p>{{end}}
+  {{if or .Report .Features}}<section class="card">
+    <h2>Feature report</h2>
+    <p class="small muted">For coordinators' in-person evaluation. It never changes the judge score.</p>
+    {{with .Report}}
+    <p><b>{{.NodeCount}}</b> nodes</p>
+    <div class="feat-grid">
+      {{range .Sections}}<div><h3>{{.Title}}</h3><ul class="features">{{range .Types}}<li>{{.Type}} <span class="muted">× {{.Count}}</span></li>{{end}}</ul></div>{{end}}
+    </div>
+    {{if .Extras}}<h3>Extras</h3><ul class="features">{{range .Extras}}<li>{{.}}</li>{{end}}</ul>{{end}}
+    {{if or .NotInIdeal .MissingFromIdeal}}<div class="feat-grid">
+      {{if .NotInIdeal}}<div><h3>Used, not in the ideal</h3><ul class="features">{{range .NotInIdeal}}<li>{{.}}</li>{{end}}</ul></div>{{end}}
+      {{if .MissingFromIdeal}}<div><h3>In the ideal, not used</h3><ul class="features">{{range .MissingFromIdeal}}<li>{{.}}</li>{{end}}</ul></div>{{end}}
+    </div>{{end}}
+    {{else}}<ul class="features">{{range .Features}}<li>{{.}}</li>{{end}}</ul>{{end}}
+  </section>{{end}}
+  <section class="card">
+    <h2>Tests</h2>
+    {{range .View.Tests}}
+    <details>
+      <summary><span class="v {{.Verdict}}">{{.Verdict}}</span> {{.ID}} <span class="muted small">{{.Category}}{{if .Visible}} · sample{{end}} · {{.Ms}} ms</span></summary>
+      {{if .Error}}<p class="notice bad">{{.Error}}</p>{{end}}
+      {{range .Checks}}<p class="small">{{if .OK}}✓{{else}}✗{{end}} {{.What}} <span class="muted">{{.Detail}}</span>{{if .Provider}} <span class="pill">{{.Provider}}{{if .Model}} · {{.Model}}{{end}}{{if .Cached}} · cached{{end}}</span>{{end}}</p>{{end}}
+      <h3>Input</h3><pre class="code">{{.Input}}</pre>
+      {{if .Steps}}
+      {{range $i, $s := .Steps}}
+      <details class="step">
+        <summary class="small">Step {{inc $i}}{{if $s.Entry}} · {{$s.Entry}}{{end}} · HTTP {{$s.Status}} · {{$s.Ms}} ms{{if $s.ViaLastNode}} · answer taken from the last node (webhook responds immediately){{end}}{{if $s.TimedOut}} · timed out{{end}}</summary>
+        {{if $s.ConnErr}}<p class="notice bad">{{$s.ConnErr}}</p>{{end}}
+        {{if $s.ExecError}}<p class="notice bad">{{$s.ErrorNode}}: {{$s.ExecError}}</p>{{end}}
+        <h4>Response</h4><pre class="code">{{$s.Body}}</pre>
+        {{if $s.Mock}}<h4>What the simulated services saw</h4><pre class="code">{{$s.Mock}}</pre>{{end}}
+      </details>
+      {{end}}
+      {{else}}<h3>Actual</h3><pre class="code">{{.Actual}}</pre>{{end}}
+    </details>
+    {{end}}
+  </section>
+  <section class="card">
+    <h2>All runs by this team this round</h2>
+    <div class="table-scroll"><table><thead><tr><th>Run</th><th>Time</th><th>Kind</th><th>Status</th><th>Score</th><th>Workflow</th></tr></thead><tbody>
+    {{range .Runs}}<tr><td><a href="/admin/runs/{{.ID}}">{{.ID}}</a></td><td>{{ts .Created}}</td><td>{{.Kind}}{{if not .Eligible}} (refunded){{end}}</td><td>{{.Status}}</td><td>{{pct .Passed.Float64 .Total.Float64}}</td><td>{{.WfName.String}}</td></tr>{{end}}
+    </tbody></table></div>
+  </section>
+</main>
+</body>
+</html>

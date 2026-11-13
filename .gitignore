@@ -1,0 +1,19 @@
+.playwright-mcp/
+bin/
+*.db
+*.db-*
+teams.csv
+dist/
+logs/
+.vscode/
+
+# Event content stays on the organiser's machine, never in the public repo
+problems/*
+!problems/0-dummy/
+handoff/event-materials/
+HANDOFF.md
+EVENT-READINESS.md
+AUDIT.md
+handoff/
+CLAUDE.md
+AGENTS.md

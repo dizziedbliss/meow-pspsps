@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>VeryJudgyCat · Automathon 2.0</title>
+<link rel="preload" href="/static/fonts/jakarta.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="/static/style.css">
+<script src="/static/theme.js"></script>
+<script src="/static/app.js" defer></script>
+</head>
+<body>
+<div class="desktop-only">
+  <div class="card"><h2>Desktop only</h2><p class="muted">The judge is built for laptops and desktops. Open it on a screen at least 1024 px wide.</p></div>
+</div>
+
+<div class="app-root shell">
+  <div id="boot" class="boot" role="status" aria-live="polite">
+    <div class="boot-card">
+      <span class="logo">VeryJudgyCat<i>.</i></span>
+      <ul class="boot-steps" id="bootSteps"></ul>
+      <div class="bar"><i id="bootBar"></i></div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="topbar">
+      <a class="logo" href="/">VeryJudgyCat<i>.</i></a>
+      <span class="spacer"></span>
+      <span class="chip" id="workersChip"><span class="dot" id="workersDot"></span><span id="workersText">Checking test machines…</span></span>
+      <span class="chip yellow">{{.Team.Name}}</span>
+      <button class="iconbtn" id="themeBtn" type="button" aria-label="Switch between light and dark">◐</button>
+      <form method="post" action="/logout"><button class="linkbtn" type="submit">Log out</button></form>
+    </div>
+
+    <div class="workspace">
+      <section class="pane" aria-labelledby="title">
+        <div class="eyebrow"><span id="roundLabel">Waiting</span><span aria-hidden="true">·</span><span id="n8nLabel">n8n</span></div>
+        <div class="tabs hidden" role="tablist" id="roundTabs" aria-label="Rounds"></div>
+        <h1 class="title" id="title">Hang tight</h1>
+        <div class="meta-chips" id="metaChips"></div>
+        <article class="statement" id="statement"><p class="muted">The problem appears here as soon as the organisers open the round. This page checks every few seconds.</p></article>
+        <details class="how">
+          <summary>How this works</summary>
+          <p>Build your workflow with the required Webhooks (download the starter above), export it and upload it. Free <b>samples</b> run the visible tests; you get a limited number of <b>scored attempts</b> per round (the page shows how many are left) and your best one counts. If something fails on our side, the attempt is refunded.</p>
+          <p><a href="/static/participant-guide.pdf" target="_blank" rel="noopener">Open the participant guide (PDF)</a></p>
+          <p><b>Your keys</b> stay in this browser tab, are held in server memory only during a run, and are never saved or logged. Use a limited key, and <b>rotate or delete it after the event</b>.</p>
+        </details>
+      </section>
+
+      <div class="rule" aria-hidden="true"><span class="marker" id="marker">–</span></div>
+
+      <section class="pane" id="bench" aria-label="Your workbench">
+        <div id="closedCard" class="card">
+          <h2>Not open yet</h2>
+          <p class="sub flush">You can upload and run your workflow once the round starts.</p>
+        </div>
+
+        <div id="openArea" class="hidden">
+          <div id="bestCard" class="card hidden">
+            <h2>Your score so far</h2>
+            <p class="sub flush" id="bestText"></p>
+          </div>
+
+          <div id="buildArea">
+            <div class="card" id="wfCard">
+              <h2><span class="step-n">1</span>Your workflow</h2>
+              <p class="sub">In n8n open your workflow, then <b>⋯ → Download</b>. Upload the file or paste its JSON.</p>
+              <div class="tabs" role="tablist" id="tabs">
+                <button type="button" role="tab" id="tabUpload" aria-selected="true" aria-controls="uploadPane">Upload file</button>
+                <button type="button" role="tab" id="tabPaste" aria-selected="false" aria-controls="pastePane">Paste JSON</button>
+              </div>
+              <div id="uploadPane" role="tabpanel" aria-labelledby="tabUpload">
+                <label class="drop" id="drop" for="file">
+                  <input id="file" type="file" accept=".json,application/json">
+                  <b>Drop your workflow JSON here</b>
+                  <span class="muted small">or click to choose a file</span>
+                </label>
+              </div>
+              <div id="pastePane" role="tabpanel" aria-labelledby="tabPaste" class="hidden">
+                <label for="paste" class="hidden">Workflow JSON</label>
+                <textarea id="paste" spellcheck="false" placeholder='{ "name": "My workflow", "nodes": [ … ], "connections": { … } }'></textarea>
+                <p><button class="btn secondary" type="button" id="pasteBtn">Check this JSON</button></p>
+              </div>
+              <div id="fileBar" class="filebar hidden"></div>
+              <div id="analysis"></div>
+            </div>
+
+            <form class="card hidden" id="credCard" autocomplete="off">
+              <h2><span class="step-n">2</span>Credentials</h2>
+              <p class="sub">We read your workflow and these are the keys it needs. They're used only for your test runs: kept in this tab and in the judge's memory, never saved or shown to anyone. Use a limited or throwaway key.</p>
+              <div id="credFields"></div>
+            </form>
+          </div>
+
+          <div class="card" id="runCard">
+            <h2><span class="step-n">3</span>Run your workflow</h2>
+            <p class="sub" id="runSub"></p>
+            <div class="notice warn" id="tokenWarn"><span class="ic">!</span><span id="tokenText"></span></div>
+            <div class="run-buttons">
+              <button class="btn secondary" type="button" id="sampleBtn" disabled>Run samples (free)</button>
+              <button class="btn" type="button" id="attemptBtn" disabled>Run attempt</button>
+            </div>
+            <p class="small muted" id="attemptInfo"></p>
+            <p class="small muted flush" id="runHint"></p>
+
+            <div id="progress" class="hidden">
+              <div class="pipeline" id="pipeline">
+                <div class="stage">Queued</div><div class="stage">Container</div><div class="stage">Import</div><div class="stage">Testing</div><div class="stage">Grading</div>
+              </div>
+              <p class="pipe-msg" id="pipeMsg" aria-live="polite"></p>
+            </div>
+            <div id="scoreBox"></div>
+            <ul class="tests" id="tests"></ul>
+          </div>
+
+          <div class="card" id="historyCard">
+            <h2>Your runs</h2>
+            <p class="sub">Samples are free. Your best finished attempt counts; an attempt that fails on our side is refunded.</p>
+            <div class="history" id="history" aria-label="Your runs"></div>
+          </div>
+        </div>
+      </section>
+    </div>
+  </div>
+</div>
+
+<dialog id="confirm" aria-labelledby="confirmTitle">
+  <h2 id="confirmTitle">Run a scored attempt?</h2>
+  <p id="confirmText" class="muted"></p>
+  <div class="row">
+    <button class="btn secondary" type="button" id="confirmNo">nevermind</button>
+    <span class="spacer"></span>
+    <button class="btn" type="button" id="confirmYes">run attempt</button>
+  </div>
+</dialog>
+</body>
+</html>

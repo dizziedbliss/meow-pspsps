@@ -1,0 +1,5 @@
+id: dummy
+title: "Practice: order summary"
+trigger: webhook
+method: POST
+step_timeout_sec: 20
