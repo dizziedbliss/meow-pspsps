@@ -1,94 +1,101 @@
-# VeryJudgyCat: n8n workflow judge for Automathon 2.0
+# VeryJudgyCat
 
-VeryJudgyCat is a LeetCode-style judge for n8n workflows, built for the Automathon 2.0 hackathon. Teams upload an exported workflow, the judge runs it in a
-fresh n8n 2.47.4 container against sample and hidden tests, and shows a verdict per sample test and how many hidden tests passed. Teams get free
-sample runs and 3 scored attempts per round (best counts). Organisers see attempts, scores, incidents and a leaderboard, and can download a CSV.
+A LeetCode-style judge for **n8n workflows**. Teams upload an exported workflow; the judge runs it in a fresh,
+throw-away n8n container against hidden tests and shows a verdict per sample test plus how many hidden tests passed.
+Built for the Automathon 2.0 hackathon, usable for any workflow contest or course.
 
-## Event-day runbook
+- **Real n8n, real runs.** Every run gets a fresh n8n 2.47.4 container, so a workflow is judged the way it would behave in production.
+- **Simulated services.** Telegram, Google Calendar, Sheets and Gmail are faked inside the judge network, so tests never message real people or touch real accounts.
+- **Rounds, attempts, leaderboard.** Free sample runs, a limited number of scored attempts per round (best counts), several rounds open at once, marks per test, offline scores, a public `/board` and a CSV export.
+- **AI-aware grading.** Checks can be exact (status, JSON paths, latency) or graded by an LLM against a rubric, with provider failover. Grader outages are refunded, never scored as zero.
+- **Scales out.** One Go binary runs the site, the test machines (`worker`) and the organiser tools. Workers only make outbound HTTPS calls, so lab PCs behind NAT work.
+- **Safe by default.** Team API keys live only in memory, hidden tests never reach teams, and containers run with `--cap-drop ALL` and `no-new-privileges`.
 
-You need: Docker, this repo built as a static binary (`CGO_ENABLED=0 go build -o bin/judge ./cmd/judge`), and `cloudflared` on the
-central machine.
+## Try it locally
 
-### 1. Every machine that runs tests (central box, R740, laptops)
-
-```bash
-bin/judge bake            # pulls n8n 2.47.4, builds meow-judge-n8n + meow-judge-mock (~2 min, once)
-```
-
-Each n8n container needs about 1 GB of RAM while running. Size the pool to what's free:
-an 8 GB laptop handles `--pool 2`, a 64 GB server `--pool 30` or more.
-
-Linux binary for another machine: `CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o judge-linux ./cmd/judge`
-(on Windows laptops, run it inside WSL with Docker Desktop).
-
-### 2. Central machine
-
-One command (after the build and `bin/judge bake`):
+You need Go 1.27+ and Docker.
 
 ```bash
-deploy/start-central.sh --make-teams --pool 2        # first time: also creates the 86 team logins in teams.csv
-deploy/start-central.sh --pool 2                     # later restarts
+CGO_ENABLED=0 go build -o bin/judge ./cmd/judge     # must be static
+bin/judge bake                                      # builds the judge n8n image (~2 min, once)
+
+# run the bundled example workflow against the example problem
+bin/judge check --problem problems/0-dummy --workflow problems/0-dummy/ideal.json -v
+
+# start the site (admin pages at /admin)
+export JUDGE_ADMIN_PASSWORD=change-me JUDGE_WORKER_TOKEN=change-me-too
+bin/judge serve --rounds 1=dummy --local-pool 2
+bin/judge teams --db judge.db --count 5 --out teams.csv    # creates logins, prints nothing secret to git
 ```
 
-It generates the admin password and worker token once (`~/.config/meow-judge/admin.pw`, `worker.token`), starts the site with a fresh
-`event.db`, rounds `1=mess,2=2-emergency` and the grader list in `~/.config/meow-judge/grader.json`, and opens a Cloudflare tunnel
-(quick tunnel by default, `--tunnel NAME` for a named one). It prints the address teams open, the admin login and the exact command to
-add a worker PC. Add `--no-tunnel` to restart only the site and keep a running tunnel (the script refuses to start if a site already answers). Stop it with `kill $(cat logs/central.pid logs/tunnel.pid)`. Print `teams.csv`, keep it private, never commit it.
+Open <http://127.0.0.1:8080>, sign in with a team from `teams.csv`, and upload `problems/0-dummy/ideal.json`.
+`--rounds` maps a round number to a problem `id` (the `id:` field in its `problem.yaml`).
 
-The grader provider is always explicit (`JUDGE_LLM_CONFIG=grader.json`: a list of providers tried in order, each with `base`, `model`,
-`key_file`, `gap_ms`; or `JUDGE_LLM_BASE` + `JUDGE_LLM_MODEL` + `JUDGE_LLM_KEY[_FILE]` for one). Nothing is guessed from a key prefix. For many Gemini keys use `"keys_file": "~/.config/meow-judge/gemini-keys.txt"` (one key per line, `#` comments allowed): each key becomes its own provider, used one after the other (a key that gets rate-limited rests for a minute while the next takes over). Use keys from different Google projects, since each project has its own free limit. A grader
-outage is a judge-side failure: the attempt is refunded, never scored zero.
+## Commands
 
-### 3. Other workers
-
-Linux PCs without Docker: `sudo ./veryjudgycat.sh install` from the worker bundle (see the section at the end). A machine that already has
-Docker and the baked images can also run `bin/judge worker --central https://<site> --token <worker token> --pool 2`.
-They show up under "Test machines" on `/admin`. Workers only make outbound HTTPS calls.
-
-### 4. During the event
-
-- `/admin`: open round 1. "Open round" closes any other open round; "Open too" keeps both open, and teams then switch between round tabs and submit to either (attempts are counted per round, one run at a time per team). Set marks per test and the maximum per round, enter offline
-  scores per team, and choose which rounds `/board` shows. Open incidents (things that broke on our side) are listed at the top.
-- Teams log in at `/` with the code and password from `teams.csv`: 3 scored attempts per round (best counts), unlimited free samples.
-- The private practice account `PPOOL` (unlimited runs, previews the pending round, not on `/board` or the CSV) is for checking the site before teams log in. The participant guide is at `/static/participant-guide.pdf`; `HANDBOOK.md` has the full event-day steps.
-- "Download CSV" gives the leaderboard with judge and offline scores per round. Each run's workflow JSON is on its detail page.
-
-### If something breaks
-
-- Central restarts: runs that were queued or running are marked failed ("please Run again"), because
-  keys live only in memory. Submissions and scores are safe in `event.db`.
-- A worker dies: its runs fail after 12 minutes. Restart it; it cleans up its old containers.
-- Check a workflow by hand: `bin/judge check --problem problems/<p> --workflow file.json -v`.
+| Command | What it does |
+|---|---|
+| `judge bake` | Pulls n8n and builds the judge images (n8n + simulators) on this machine |
+| `judge check` | Runs one workflow against one problem locally, with `--times N` and `-v` |
+| `judge serve` | Central site: team pages, admin, queue, leaderboard, worker API |
+| `judge worker` | A test machine that pulls runs from a central site (`--central`, `--token`, `--pool`) |
+| `judge teams` | Creates team logins and writes `teams.csv` (keep it private) |
 
 ## Writing a problem
 
-`problems/<dir>/problem.yaml`, `statement.md` (shown to teams) and `tests/*.yaml`. See
-`problems/0-dummy` for every feature: sample vs hidden tests, random `vars`, computed `let`, raw
-malformed bodies, `=json` templated arrays, status/JSON-path/contains/latency checks, and `rubric`
-for the LLM judge. Always prove the reference workflow passes:
+A problem is a folder under `problems/`:
+
+```
+problems/<dir>/
+  problem.yaml     id, title, trigger (webhook / telegram), entries, limits
+  statement.md     what teams see: the contract only
+  tests/*.yaml     sample (visible) and hidden tests
+  ideal.json       a reference workflow that must pass everything
+```
+
+Tests have seeded random `vars`, computed `let` values, one or more steps, and `expect` checks (status, JSON paths,
+substrings, latency, simulator side effects, or an LLM `rubric`). Rendering is deterministic per seed, so expected values are
+never stored or sent to workers. [`problems/0-dummy`](problems/0-dummy) uses every feature; always prove your reference workflow passes:
 
 ```bash
 bin/judge check --problem problems/<dir> --workflow problems/<dir>/ideal.json --times 3
 ```
 
-### Worker PCs (college lab, Linux, no Docker yet)
+For the LLM grader, point `JUDGE_LLM_CONFIG` at a JSON list of providers (each with `base`, `model`, `key_file`), or use
+`JUDGE_LLM_BASE` + `JUDGE_LLM_MODEL` + `JUDGE_LLM_KEY`. Nothing is guessed from a key prefix.
 
-On the organiser machine, after the final build and bake: `./deploy/make-bundle.sh` writes `dist/worker-bundle/` (about 350 MB:
-the Linux binary, the saved judge images, install and uninstall scripts). Copy that folder to each PC (USB, shared drive or
-`python3 -m http.server`), boot Linux, and run:
+## How it works
 
-    sudo ./veryjudgycat.sh install --central https://<site> --pool 2     # --dry-run shows the steps first
+```
+ team browser ──► central site (Go, SQLite) ──queue──► workers ──► fresh n8n container
+                       │  admin, /board, CSV                         └─► simulators (Telegram, Google)
+                       └─ grader (LLM, optional)
+```
 
-It installs Docker from the distro repos if missing (Debian/Ubuntu; elsewhere install Docker and add `--skip-docker`), loads the images,
-and starts a `veryjudgycat-worker` service. The token sits in a root-only file. Pool 2 suits a 6 GB PC. After the event:
+- `internal/workflow` parses an export, finds the trigger, checks node types against the n8n catalog, detects needed credentials and hardcoded keys.
+- `internal/runner` manages the container pool and runs tests through n8n's public API.
+- `internal/problem` loads problems and renders tests. `internal/grade` turns results into verdicts.
+- `internal/mock` is the fake Telegram/Google backend. `internal/server` is the site, admin and worker API.
 
-    sudo ./veryjudgycat.sh uninstall      # stops the service, removes containers, images, /opt/veryjudgycat, and Docker if we installed it (`--keep-docker` to keep it)
+## Running an event
 
-Then delete the copied folder. Test the worker installer and connectivity on one college PC before installing on the others.
+- [`docs/RUNBOOK.md`](docs/RUNBOOK.md): central machine, tunnel, workers, admin and troubleshooting.
+- [`HANDBOOK.md`](HANDBOOK.md): the event-day checklist.
+- `deploy/start-central.sh` starts the site (and a Cloudflare tunnel); `deploy/make-bundle.sh` builds an offline installer for Docker-less lab PCs.
 
-## Event content is not in this repo
+Real event problem packs and hidden tests are deliberately not in this repository; keep yours out of git too (`problems/*` is gitignored except the example).
 
-The real problem packs (`problems/1-mess`, `problems/2-emergency`), their hidden tests and the organiser
-test-case PDFs live only on the organiser's machine and are gitignored. `problems/0-dummy` is a complete
-example of the format. To run your own event, add packs under `problems/<dir>/` and pass them with
-`--rounds 1=<dir>,2=<dir>`. Tests that need a real event pack skip themselves when it is absent.
+## Development
+
+```bash
+gofmt -l . && go vet ./... && go test ./...
+```
+
+## Known limitations
+
+This is a personal/college-stage project, not hardened for the open internet.
+
+- Judge containers share one Docker network and have no egress filtering, so a workflow can reach the worker's LAN. Run workers on an isolated network.
+- The simulated Sheets backend has no size caps.
+- A workflow can influence whether a run counts as rate-limited (and so refunded).
+- Python Code nodes are not supported; OAuth credentials are rejected except for the simulated services.

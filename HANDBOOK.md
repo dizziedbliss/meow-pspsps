@@ -12,10 +12,10 @@ Use this for the Automathon event. The organiser laptop is the **central machine
 
 ## At college: central machine
 
-Open a terminal on the central laptop, enter the WSL Arch environment if using Windows, and go to the project:
+Open a terminal on the central laptop (WSL if it runs Windows) and go to the project:
 
 ```bash
-cd /home/dizziedbliss/github/meow-pspsps
+cd path/to/meow-pspsps
 ```
 
 Check whether the central site is already running:
