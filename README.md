@@ -25,7 +25,7 @@ bin/judge check --problem problems/0-dummy --workflow problems/0-dummy/ideal.jso
 # start the site (admin pages at /admin)
 export JUDGE_ADMIN_PASSWORD=change-me JUDGE_WORKER_TOKEN=change-me-too
 bin/judge serve --rounds 1=dummy --local-pool 2
-bin/judge teams --db judge.db --count 5 --out teams.csv    # creates logins, prints nothing secret to git
+bin/judge teams --db judge.db --count 5 --out teams.csv    # creates logins (teams.csv is gitignored)
 ```
 
 Open <http://127.0.0.1:8080>, sign in with a team from `teams.csv`, and upload `problems/0-dummy/ideal.json`.
