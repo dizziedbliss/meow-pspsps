@@ -11,6 +11,16 @@ Built for the Automathon 2.0 hackathon, usable for any workflow contest or cours
 - **Scales out.** One Go binary runs the site, the test machines (`worker`) and the organiser tools. Workers only make outbound HTTPS calls, so lab PCs behind NAT work.
 - **Safe by default.** Team API keys live only in memory, hidden tests never reach teams, and containers run with `--cap-drop ALL` and `no-new-privileges`.
 
+## Screenshots
+
+Taken from a demo instance with made-up teams.
+
+| Team page | Leaderboard |
+|---|---|
+| ![Team page: problem statement, upload, run](docs/screenshots/team-page.png) | ![Public leaderboard](docs/screenshots/leaderboard.png) |
+
+![Organiser page: rounds, marks, attempts, per-team table and CSV export](docs/screenshots/admin.png)
+
 ## Try it locally
 
 You need Go 1.27+ and Docker.
